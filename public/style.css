@@ -1,0 +1,211 @@
+/* Gitty：深色毛玻璃横条
+   高度 --bar-h = 315px（实测约 6cm）；字号整体放大。 */
+:root {
+  --bar-h: 315px;
+  --bg: #141412;
+  --ink: #EDE9DE;
+  --muted: #8E8A80;
+  --red: #FF6B55;
+  --hair: rgba(237, 233, 222, .12);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+html.tauri, html.tauri body { background: transparent !important; }
+/* Tauri 里由系统 Acrylic 提供模糊，CSS 只留很轻的暗色叠加 */
+html.tauri .radar { background: rgba(18, 18, 16, .22); -webkit-backdrop-filter: none; backdrop-filter: none; }
+body {
+  margin: 0; min-width: 640px; background: #C6C2B8; color: var(--ink);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
+
+.radar {
+  position: relative; height: var(--bar-h); width: 100%;
+  display: flex; flex-direction: column;
+  background: rgba(18, 18, 16, .45);
+  -webkit-backdrop-filter: blur(26px) saturate(1.2);
+  backdrop-filter: blur(26px) saturate(1.2);
+  border-top: 1px solid rgba(237, 233, 222, .30);
+  box-shadow: 0 -18px 50px rgba(0, 0, 0, .25);
+}
+
+/* 三列网格：左路径 / 中时间轴 / 右控件，互不重叠 */
+header { position: relative; height: 48px; flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 0 26px; border-bottom: 1px solid var(--hair); }
+.h-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.h-right { display: flex; align-items: center; gap: 14px; justify-self: end; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 11px; font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; font-weight: 700; letter-spacing: .16em; font-size: 20px; color: var(--ink); }
+.brand-mark { width: 14px; height: 14px; background: var(--red); display: block; transform: rotate(45deg); }
+.repo-wrap { position: relative; flex: 0 1 280px; min-width: 0; max-width: 280px; }
+.repo { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; padding: 0; color: #CFCBC0; font-size: 15px; letter-spacing: .01em; text-align: left; cursor: pointer; }
+#repo-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.repo i { flex: none; font-style: normal; color: var(--muted); font-size: 11px; }
+
+/* 仓库切换下拉：深色玻璃面板 */
+.repo-menu { position: absolute; top: calc(100% + 12px); left: 0; width: 380px; max-width: 72vw; z-index: 40; padding: 10px; background: rgba(20, 20, 18, .96); border: 1px solid var(--hair); border-radius: 10px; box-shadow: 0 18px 44px rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.repo-menu-title { padding: 2px 8px 6px; font-size: 10px; letter-spacing: .1em; color: var(--muted); }
+.repo-list { max-height: 240px; overflow: auto; }
+.repo-list .repo-menu-title { padding: 8px; }
+.repo-item { display: block; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: 500 12px ui-monospace, Consolas, monospace; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.repo-item:hover { background: rgba(255, 255, 255, .08); }
+.repo-item.current { background: rgba(255, 255, 255, .06); }
+.repo-item.current::after { content: '●'; margin-left: 8px; font-size: 8px; color: var(--red); }
+.repo-menu-input { display: flex; margin-top: 6px; padding: 8px 4px 2px; border-top: 1px solid var(--hair); }
+.repo-path { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--hair); border-radius: 6px; background: rgba(255, 255, 255, .06); color: var(--ink); font: 12px ui-monospace, Consolas, monospace; outline: none; }
+.repo-path::placeholder { color: #7C776C; }
+
+/* 工具按钮：FETCH / AUTO */
+.tool-btn { flex: none; padding: 5px 9px; border: 1px solid var(--hair); border-radius: 999px; background: rgba(255, 255, 255, .06); color: #C5C1B6; font: 600 10px ui-monospace, Consolas, monospace; letter-spacing: .08em; cursor: pointer; }
+.tool-btn:hover { background: rgba(255, 255, 255, .12); }
+.tool-btn.on { background: var(--ink); color: #141412; }
+.tool-btn.busy { opacity: .5; pointer-events: none; }
+/* 工作区状态：已暂存 / 未暂存 / 未跟踪 */
+.wt { flex: none; display: flex; align-items: center; gap: 7px; padding: 3px 9px; border: 1px solid var(--hair); border-radius: 999px; background: rgba(255, 255, 255, .06); font: 600 11px ui-monospace, Consolas, monospace; color: var(--ink); white-space: nowrap; }
+.wt .s { color: #6D9BFF; }
+.wt .u { color: #F5C542; }
+.wt .n { color: #FF6B55; }
+
+/* 顶部时间轴：点线风格，实心点=release，空心环=当前视口位置 */
+.timeline { position: relative; justify-self: center; width: 100%; max-width: 420px; min-width: 0; height: 20px; cursor: pointer; touch-action: none; }
+.timeline.static { opacity: .45; pointer-events: none; }
+.tl-line { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: repeating-linear-gradient(90deg, rgba(237, 233, 222, .38) 0 2px, transparent 2px 7px); }
+.tl-mark { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; }
+.tl-view {
+  position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  background: var(--dot, var(--red)); border: 1.5px solid rgba(20, 20, 18, .95);
+  border-radius: 1px; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(20, 20, 18, .22);
+}
+/* 连接状态点：正常时隐藏，服务断开才显示红点 */
+/* 连接状态：常亮小点，正常暗白、断线变红 */
+.status { flex: none; width: 8px; height: 8px; border-radius: 50%; background: rgba(237, 233, 222, .28); transition: background .3s ease, box-shadow .3s ease; }
+.status.offline { background: var(--red); box-shadow: 0 0 0 3px rgba(255, 107, 85, .22); }
+
+/* 快捷键提示：路径栏右侧 */
+.shortcuts { flex: none; display: flex; align-items: center; gap: 6px; color: #C5C1B6; font-size: 13px; white-space: nowrap; transition: opacity .3s ease; }
+.shortcuts kbd { font: 700 12px ui-monospace, Consolas, monospace; color: var(--ink); background: rgba(255, 255, 255, .12); border: 1px solid rgba(237, 233, 222, .28); border-radius: 5px; padding: 2px 7px; }
+.shortcuts span { margin-right: 8px; }
+
+/* 新提交提示：与整体一致的玻璃胶囊，占位于右侧控件之间，不会盖住按钮 */
+#notice { flex: none; padding: 5px 11px; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid var(--hair); color: var(--ink); font-size: 11px; letter-spacing: .03em; white-space: nowrap; }
+@media (max-width: 1150px) { .shortcuts { display: none; } }
+@media (max-width: 900px) { .timeline { display: none; } }
+
+/* 视角切换：玻璃胶囊 + 滑动亮色药丸（放在顶栏最右） */
+.mode-toggle {
+  position: relative; flex: none; display: flex; width: 150px; height: 34px; padding: 2px;
+  border: 1px solid var(--hair); border-radius: 999px;
+  background: rgba(255, 255, 255, .06);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.mode-toggle .pill {
+  position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: calc(100% - 4px);
+  background: var(--ink); border-radius: 999px;
+  transition: transform .38s cubic-bezier(.22, .61, .36, 1);
+}
+.mode-toggle[data-active="remote"] .pill { transform: translateX(100%); }
+.mode-toggle button {
+  position: relative; z-index: 1; flex: 1; border: 0; background: none; padding: 0;
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 14px; font-weight: 600; letter-spacing: .08em;
+  color: var(--muted); cursor: pointer; transition: color .3s ease;
+}
+.mode-toggle[data-active="local"] button[data-mode="local"],
+.mode-toggle[data-active="remote"] button[data-mode="remote"] { color: #141412; }
+.mode-toggle button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 999px; }
+
+.empty { flex: 1; display: grid; place-items: center; font-size: 14px; color: var(--muted); }
+
+.graph { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* 不放滚动条：横向靠滚轮/触控板，纵向由行高压缩解决 */
+.scroll { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; -ms-overflow-style: none; }
+.scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#canvas { display: block; }
+.hits { position: absolute; left: 0; top: 0; pointer-events: none; }
+.hit { position: absolute; width: 26px; height: 26px; transform: translate(-50%, -50%); pointer-events: auto; cursor: default; }
+
+/* —— 图层：远端线（模糊）→ 本地（模糊）→ 玻璃带 → 本地清晰 → 远端线清晰 → 圆环 → 名字 ——
+   远端圆环始终清晰，与本地同心：共有的提交 = 大圆套小点 */
+.layer { transition: opacity .5s cubic-bezier(.22, .61, .36, 1); }
+.back-remote, .back-local { filter: blur(2.2px); }
+/* 本地点在远端模式下也要看得清：比边少一点模糊 */
+.back-dots { filter: blur(1.2px); }
+.panels { transition: opacity .4s ease; }
+/* 本地在前时，远端圆环做毛玻璃：轻微模糊 + 略降透明度（保持看得见）；远端在前时恢复清晰 */
+.rings { transition: opacity .5s cubic-bezier(.22,.61,.36,1), filter .5s cubic-bezier(.22,.61,.36,1); filter: blur(1.2px); opacity: .9; }
+html[data-mode="remote"] .rings { filter: none; opacity: 1; }
+
+html[data-mode="local"] .back-remote { opacity: .5; }
+html[data-mode="local"] .back-local { opacity: 0; }
+html[data-mode="local"] .back-dots { opacity: 0; }
+html[data-mode="local"] .panels { opacity: 1; }
+html[data-mode="local"] .front-remote { opacity: 0; }
+html[data-mode="local"] .front-edges { opacity: 1; }
+html[data-mode="local"] .front-dots { opacity: 1; }
+
+html[data-mode="remote"] .back-remote { opacity: 0; }
+html[data-mode="remote"] .back-local { opacity: .3; }
+html[data-mode="remote"] .back-dots { opacity: .6; }
+html[data-mode="remote"] .panels { opacity: 1; }
+html[data-mode="remote"] .front-remote { opacity: 1; }
+html[data-mode="remote"] .front-edges { opacity: 0; }
+html[data-mode="remote"] .front-dots { opacity: 0; }
+
+/* 图形 */
+.edge { stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.edge.stub { stroke-width: 1.4; stroke-dasharray: 2 5; opacity: .3; }
+.node { stroke-width: 2; }
+.node.tip { stroke-width: 2.2; }
+.node.new { transform-box: fill-box; transform-origin: center; animation: pop 1s ease; }
+.remote-ring.new { transform-box: fill-box; transform-origin: center; animation: pop 1s ease; }
+@keyframes pop { from { opacity: 0; transform: scale(.35); } }
+.dim { opacity: .12 !important; }
+
+.remote-line { fill: none; stroke-width: 2; stroke-opacity: .6; }
+/* 圆环真正镂空（不填色）；穿过环内部的线由 mask 挖掉 */
+.remote-ring { fill: none; stroke-width: 2; stroke-opacity: .8; }
+html[data-mode="remote"] .remote-ring { stroke-opacity: 1; }
+html[data-mode="remote"] .front-remote .remote-line { stroke-width: 2.4; stroke-opacity: 1; }
+
+/* 玻璃带：明显一点，但仍是一层雾 */
+.glass { fill: rgba(255, 255, 255, .10); stroke: rgba(255, 255, 255, .22); stroke-width: 1; }
+
+/* 名字：不参与模糊 */
+.chips { pointer-events: none; }
+.chip { pointer-events: auto; cursor: pointer; font: 600 19px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 4px; stroke-linejoin: round; }
+.chip.current { font-weight: 700; }
+.chip-head { font-size: 24px; }
+.chip-count { font: 500 14px ui-monospace, Consolas, monospace; fill: var(--muted); }
+.chip-remote { display: none; }
+.chip-remote.muted { opacity: .45; }
+html[data-mode="remote"] .chip-local { display: none; }
+html[data-mode="remote"] .chip-remote { display: inline; }
+/* 纯远端分支名：本地模式不显示，切到远端才出现 */
+.merge-label { font-size: 13px; }
+.chip-ghost { display: none; font: 500 15px ui-monospace, Consolas, monospace; fill: var(--muted); opacity: .65; }
+html[data-mode="remote"] .chip-ghost { display: inline; opacity: 1; }
+
+
+/* 悬停提示 */
+/* tag 标记：指向提交的三角 + 标签名，深色描边做光环 */
+.tag-mark { stroke: rgba(20, 20, 18, .9); stroke-width: 2.5; paint-order: stroke; stroke-linejoin: round; opacity: .95; }
+.tag-name { font: 500 12px ui-monospace, Consolas, monospace; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 3px; stroke-linejoin: round; }
+
+/* 提交详情卡（双击提交点） */
+#detail { position: fixed; z-index: 21; width: 380px; max-height: 60vh; overflow: auto; padding: 14px 16px; background: var(--ink); color: #141412; font-size: 13px; line-height: 1.5; box-shadow: 6px 6px 0 var(--red); }
+#detail h3 { margin: 0 0 4px; font: 700 15px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; }
+#detail .meta { color: #5A574F; font-size: 11.5px; margin-bottom: 8px; }
+#detail .subject { font-weight: 600; margin-bottom: 6px; }
+#detail .body { white-space: pre-wrap; color: #3F3C35; margin-bottom: 8px; max-height: 120px; overflow: auto; }
+#detail .stat { color: #5A574F; font-size: 11.5px; margin-bottom: 6px; }
+#detail ul { margin: 0; padding: 0; list-style: none; font-size: 11.5px; }
+#detail li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; border-top: 1px solid rgba(20, 20, 18, .08); }
+#detail li span:last-child { color: #5A574F; white-space: nowrap; }
+#detail .more { color: #5A574F; font-size: 11px; margin-top: 4px; }
+
+#tip { position: fixed; z-index: 20; width: 280px; padding: 10px 13px; background: var(--ink); color: #141412; font-size: 15px; line-height: 1.5; box-shadow: 5px 5px 0 var(--red); }
+#tip b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tip span { display: block; color: #4A473F; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tip em { display: block; color: #7A766C; font-style: normal; margin-top: 3px; }
+
+@media (max-width: 720px) { body { min-width: 0; } .repo { display: none; } }

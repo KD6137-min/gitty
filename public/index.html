@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN" data-mode="local">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gitty</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="radar" aria-live="polite">
+      <header>
+        <div class="h-left">
+          <div class="brand"><span class="brand-mark"></span><span>GITTY</span></div>
+          <div class="repo-wrap">
+            <button id="repo" class="repo" title="切换仓库"><span id="repo-label">正在读取仓库</span><i>▾</i></button>
+            <div id="repo-menu" class="repo-menu" hidden>
+              <div class="repo-menu-title">最近仓库</div>
+              <div id="repo-list" class="repo-list"></div>
+              <div class="repo-menu-input">
+                <input id="repo-path" class="repo-path" placeholder="输入仓库路径，回车打开" />
+              </div>
+            </div>
+          </div>
+          <div id="wt" class="wt" hidden></div>
+        </div>
+        <div id="timeline" class="timeline" title="拖动查看历史，实心点是 release">
+          <div class="tl-line"></div>
+          <div id="tl-marks" class="tl-marks"></div>
+          <div id="tl-view" class="tl-view"></div>
+        </div>
+        <div class="h-right">
+          <div class="shortcuts" aria-hidden="true"><kbd>T</kbd><span>视角</span><kbd>F</kbd><span>聚焦</span><kbd>R</kbd><span>刷新</span></div>
+          <button id="fetch" class="tool-btn" title="git fetch --all --prune">FETCH</button>
+          <button id="auto" class="tool-btn" title="每 60 秒自动 fetch">AUTO</button>
+          <div id="notice" class="notice" hidden></div>
+          <div class="mode-toggle" id="mode-toggle" data-active="local" role="group" aria-label="视角：本地 / 远端">
+            <span class="pill" aria-hidden="true"></span>
+            <button type="button" data-mode="local" class="on" aria-pressed="true">本地</button>
+            <button type="button" data-mode="remote" aria-pressed="false">远端</button>
+          </div>
+          <div id="status" class="status" title="已连接"></div>
+        </div>
+      </header>
+      <section id="empty" class="empty">正在建立分支雷达…</section>
+      <section id="graph" class="graph" hidden>
+        <div id="scroll" class="scroll">
+          <svg id="canvas" role="img" aria-label="Git 分支雷达">
+            <defs id="defs"></defs>
+            <g id="backRemote" class="layer back-remote"></g>
+            <g id="backLocal" class="layer back-local"></g>
+            <g id="backDots" class="layer back-dots"></g>
+            <g id="panels" class="panels"></g>
+            <g id="frontRemote" class="layer front-remote"></g>
+            <g id="frontEdges" class="layer front-edges"></g>
+            <g id="rings" class="rings"></g>
+            <g id="frontDots" class="layer front-dots"></g>
+            <g id="chips" class="chips"></g>
+          </svg>
+          <div id="hits" class="hits"></div>
+        </div>
+      </section>
+    </main>
+    <div id="tip" class="tip" hidden></div>
+    <div id="detail" class="detail" hidden></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

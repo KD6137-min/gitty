@@ -1,0 +1,18 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/
+
+# 运行时生成
+.recent-repos.json
+build.log
+*.log
+
+# 演示仓库由 scripts/build-demo.sh 生成，不纳入版本库
+demo/
+
+# 旧版本备份
+.backup-*/
