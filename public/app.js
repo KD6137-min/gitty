@@ -1020,6 +1020,13 @@ async function refresh() {
   } catch (error) {
     $('#status').className = 'status offline';
     $('#status').title = error.message;
+    // 首次加载就失败（例如安装版还没选仓库）时给明确引导；已有画面则保留最后一帧
+    if (!lastData) {
+      const empty = $('#empty');
+      empty.hidden = false;
+      empty.textContent = `${error.message} · 点击上方路径选择一个 Git 仓库`;
+      $('#graph').hidden = true;
+    }
     console.error(error);
   }
 }
