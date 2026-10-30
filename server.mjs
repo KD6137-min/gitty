@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { existsSync, watch, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, watch, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -9,7 +9,10 @@ const exec = promisify(execFile);
 let root = resolve(process.argv.find((arg) => arg.startsWith('--repo='))?.slice(7) || process.cwd());
 const publicDir = join(import.meta.dirname, 'public');
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
-const RECENT_FILE = join(import.meta.dirname, '.recent-repos.json');
+// 安装版会把 server.mjs 放在只读的安装目录里，最近仓库记录改写到用户数据目录
+const DATA_DIR = process.env.GITTY_DATA_DIR || import.meta.dirname;
+try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* 忽略 */ }
+const RECENT_FILE = join(DATA_DIR, '.recent-repos.json');
 let revision = 0;
 
 function readRecent() {

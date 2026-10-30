@@ -1,9 +1,9 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 const BAR_HEIGHT: f64 = 315.0;
 
@@ -33,19 +33,33 @@ fn server_ready() -> bool {
     .is_ok()
 }
 
-/// 启动随附的 Node 服务；如果 4173 已经在监听则直接复用
-fn spawn_server() {
+fn read_last_repo(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(dir.join(".recent-repos.json")).ok()?;
+    let list: Vec<String> = serde_json::from_str(&raw).ok()?;
+    list.into_iter().next()
+}
+
+/// 启动随附的 Node 服务；如果 4173 已经在监听则直接复用。
+/// 安装版里 server.mjs 与 public/ 作为资源放在 exe 旁边，project_root() 能找到。
+fn spawn_server(data_dir: Option<PathBuf>, last_repo: Option<String>) {
     if server_ready() {
         return;
     }
     let Some(root) = project_root() else { return };
     let mut cmd = std::process::Command::new("node");
     cmd.arg("server.mjs");
-    let demo = root.join("demo").join("showcase");
-    if demo.exists() {
-        cmd.arg(format!("--repo={}", demo.display()));
+    if let Some(repo) = last_repo {
+        cmd.arg(format!("--repo={repo}"));
+    } else {
+        let demo = root.join("demo").join("showcase");
+        if demo.exists() {
+            cmd.arg(format!("--repo={}", demo.display()));
+        }
     }
     cmd.current_dir(&root);
+    if let Some(dir) = data_dir {
+        cmd.env("GITTY_DATA_DIR", dir);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -160,10 +174,16 @@ fn set_bottom(hwnd_addr: isize) {
 }
 
 fn main() {
-    spawn_server();
-
     tauri::Builder::default()
         .setup(|app| {
+            // 最近仓库记录写到用户数据目录（安装目录通常不可写）
+            let data_dir = app.path().app_data_dir().ok();
+            if let Some(dir) = &data_dir {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let last_repo = data_dir.as_ref().and_then(|d| read_last_repo(d));
+            spawn_server(data_dir.clone(), last_repo);
+
             let url = WebviewUrl::External("http://localhost:4173".parse().expect("url"));
             let window = WebviewWindowBuilder::new(app, "main", url)
                 .title("Gitty")
