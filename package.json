@@ -1,6 +1,6 @@
 {
   "name": "gitty",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "A quiet, Bauhaus-style Git branch radar",
   "scripts": {
