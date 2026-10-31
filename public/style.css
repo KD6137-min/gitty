@@ -73,6 +73,11 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 .tool-btn:hover { background: rgba(255, 255, 255, .12); }
 .tool-btn.on { background: var(--ink); color: #141412; }
 .tool-btn.busy { opacity: .5; pointer-events: none; }
+/* 横版：FETCH / AUTO 合成一个胶囊，中间留一条小缝 */
+.fetch-group { display: contents; }
+html[data-orient="h"] .fetch-group { display: inline-flex; align-items: center; gap: 2px; }
+html[data-orient="h"] .fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
+html[data-orient="h"] .fetch-group #auto { border-radius: 3px 999px 999px 3px; }
 /* 工作区状态：已暂存 / 未暂存 / 未跟踪 */
 .wt { flex: none; display: flex; align-items: center; gap: 7px; padding: 3px 9px; border: 1px solid var(--hair); border-radius: 999px; background: rgba(255, 255, 255, .06); font: 600 11px ui-monospace, Consolas, monospace; color: var(--ink); white-space: nowrap; }
 .wt .s { color: #6D9BFF; }
@@ -97,12 +102,12 @@ html[data-orient="v"] .radar { width: 315px; height: 100vh; overflow: hidden; }
 html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
 html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
 html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
-html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: center; flex-wrap: wrap; gap: 10px; }
+html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: center; flex-wrap: wrap; gap: 6px; }
 html[data-orient="v"] .shortcuts { display: none; }
-html[data-orient="v"] .mode-toggle { width: 112px; height: 28px; }
-/* 竖版：按钮行居中并适当放大；状态点固定在右上角 */
-html[data-orient="v"] .tool-btn { font-size: 12px; padding: 6px 12px; }
-html[data-orient="v"] .status { position: absolute; right: 12px; top: 16px; margin: 0; }
+html[data-orient="v"] .mode-toggle { width: 88px; height: 30px; }
+html[data-orient="v"] .mode-toggle button { font-size: 13px; letter-spacing: .04em; }
+/* 竖版：按钮行居中并适当放大，状态点跟着一起居中 */
+html[data-orient="v"] .tool-btn { font-size: 13px; padding: 7px 10px; }
 html[data-orient="v"] .graph { min-height: 0; }
 html[data-orient="v"] .scroll { right: 26px; }
 html[data-orient="v"] .timeline {
@@ -154,6 +159,14 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 .mode-toggle[data-active="local"] button[data-mode="local"],
 .mode-toggle[data-active="remote"] button[data-mode="remote"] { color: #141412; }
 .mode-toggle button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 999px; }
+/* 横版：细调一点视觉重心，并把「横 / 竖」做成同款分段开关 */
+html[data-orient="h"] .mode-toggle { top: 1px; }
+.orient-toggle { display: none; width: 100px; }
+html[data-orient="h"] .orient-toggle { display: flex; }
+html[data-orient="h"] #orient { display: none; }
+.orient-toggle[data-active="v"] .pill { transform: translateX(100%); }
+.orient-toggle[data-active="h"] button[data-orient="h"],
+.orient-toggle[data-active="v"] button[data-orient="v"] { color: #141412; }
 
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; font-size: 15px; color: #CFCBC0; letter-spacing: .02em; }
 .empty-title { font-size: 16px; font-weight: 600; color: var(--ink); }
@@ -227,13 +240,9 @@ html[data-mode="remote"] .front-remote .remote-line { stroke-width: 2.4; stroke-
 .chip.current { font-weight: 700; }
 .chip-head { font-size: 24px; }
 /* 竖版：水平两行的分支名 */
-.chip-v { font-size: 12px; stroke-width: 3px; }
-.chip-v .chip-count { font-size: 10px; }
-.chip-v .chip-head { font-size: 14px; }
-/* 竖版用单按钮替代「本地 / 远端」分段开关 */
-.mode-single { display: none; }
-html[data-orient="v"] .mode-single { display: inline-block; }
-html[data-orient="v"] .mode-toggle { display: none; }
+.chip-v { font-size: 19px; stroke-width: 4px; }
+.chip-v .chip-count { font-size: 14px; }
+.chip-v .chip-head { font-size: 24px; }
 .chip-count { font: 500 14px ui-monospace, Consolas, monospace; fill: var(--muted); }
 .chip-remote { display: none; }
 .chip-remote.muted { opacity: .45; }

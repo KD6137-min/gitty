@@ -429,10 +429,12 @@ function layout(data, viewportW, viewportH) {
     if (ch.kind !== 'ghost' || !ch.commits.length) continue;
     const lane = laneOfChain.get(ch.id);
     if (lane === undefined) continue;
+    // 横版时间向右增大、竖版向下增大：尖端与最老提交的方向随朝向翻转
     let tipHash = ch.commits[0], oldestHash = ch.commits[0];
     for (const x of ch.commits) {
-      if (timeOf.get(x) > timeOf.get(tipHash)) tipHash = x;
-      if (timeOf.get(x) < timeOf.get(oldestHash)) oldestHash = x;
+      const t = timeOf.get(x);
+      if (h ? t > timeOf.get(tipHash) : t < timeOf.get(tipHash)) tipHash = x;
+      if (h ? t < timeOf.get(oldestHash) : t > timeOf.get(oldestHash)) oldestHash = x;
     }
     const parent = byHash.get(oldestHash).parents[0];
     if (parent && inWin.has(parent)) {
@@ -513,6 +515,41 @@ const ringEl = (r) => {
   const d = dim(r.chain);
   return `<circle class="remote-ring${d}${r.isNew ? ' new' : ''}" cx="${S(r.x)}" cy="${S(r.y)}" r="8" style="stroke:${r.color}"/>`;
 };
+
+// 竖版：长分支名在窄条右缘会被 SVG 裁掉，渲染后按实际宽度平移回可视区；
+// 再从上往下排一次，近距离的两条名字互相让开（上面的整体上移）
+function fitVerticalChips(svgW) {
+  if (!svgW) return;
+  const margin = 3, gap = 6;
+  const items = [];
+  for (const t of document.querySelectorAll('#chips text.chip-v')) {
+    if (getComputedStyle(t).display === 'none') continue;
+    t.removeAttribute('transform');
+    const b = t.getBBox();
+    if (!b.width) continue;
+    let dx = 0;
+    if (b.x < margin) dx = margin - b.x;
+    else if (b.x + b.width > svgW - margin) dx = svgW - margin - (b.x + b.width);
+    if (Math.abs(dx) > 0.5) t.setAttribute('transform', `translate(${S(dx)} 0)`);
+    const r = t.getBoundingClientRect();
+    items.push({ t, dx, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+  }
+  items.sort((a, b) => b.bottom - a.bottom);
+  const placed = [];
+  for (const it of items) {
+    let dy = 0;
+    for (const p of placed) {
+      if (it.left >= p.right || it.right <= p.left) continue;
+      dy = Math.min(dy, p.top - gap - it.bottom);
+    }
+    if (dy < -0.5) {
+      it.t.setAttribute('transform', `translate(${S(it.dx)} ${S(dy)})`);
+      it.top += dy;
+      it.bottom += dy;
+    }
+    placed.push(it);
+  }
+}
 
 // —— 渲染 ——
 let lastData = null;
@@ -604,22 +641,24 @@ function render(data) {
   // 名字：横版在尖端右侧；竖版旋转在尖端上方
   const chips = [];
   const drawn = new Set();
-  // 分支名按第一个 / 拆成两行（竖版用）
-  const splitName = (name) => {
-    const i = name.indexOf('/');
-    return i > 0 && i < name.length - 1 ? [name.slice(0, i), name.slice(i + 1)] : [name, null];
-  };
+  // 竖版按每个 / 分行；横版仍然用 / 连回一整行
+  const splitName = (name) => String(name).split('/').filter(Boolean);
   const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '') => {
     const cls = `chip${extraCls}${dim(chainId)}`;
     if (isH()) {
       const text = lines.filter(Boolean).join('/');
       return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
     }
-    const [l1, l2] = lines;
-    if (!l2) {
-      return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 12)}" text-anchor="middle" style="fill:${color}">${esc(l1)}${extraHtml}</text>`;
+    const rows = lines.map((part, i) => (i === 0 ? part : '/' + part));
+    if (rows.length <= 1) {
+      return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 16)}" text-anchor="middle" style="fill:${color}">${esc(rows[0] || '')}${extraHtml}</text>`;
     }
-    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}"><tspan x="${S(x)}" y="${S(y - 26)}">${esc(l1)}/</tspan><tspan x="${S(x)}" y="${S(y - 12)}">${esc(l2)}${extraHtml}</tspan></text>`;
+    // 有几个 / 就分几行：第一行只留前缀，后续每行以 / 开头
+    const spans = rows.map((row, i) => {
+      const baseline = y - 16 - (rows.length - 1 - i) * 28;
+      return `<tspan x="${S(x)}" y="${S(baseline)}">${esc(row)}${i === rows.length - 1 ? extraHtml : ''}</tspan>`;
+    }).join('');
+    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}">${spans}</text>`;
   };
   for (const head of L.locals) {
     const lane = L.laneOf.get(head.hash);
@@ -679,6 +718,7 @@ function render(data) {
     }
   }
   $('#chips').innerHTML = chips.join('');
+  if (!isH()) fitVerticalChips(L.svgW);
 
   const tagsAt = (hash) => (tagByHash.get(hash) || []).join(', ');
   const hits = [];
@@ -964,8 +1004,9 @@ function bindUi() {
   $('#orient').addEventListener('click', () => {
     setOrientation(isH() ? 'v' : 'h');
   });
-  $('#mode-single').addEventListener('click', () => {
-    setMode(document.documentElement.dataset.mode === 'local' ? 'remote' : 'local');
+  $('#orient-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-orient]');
+    if (btn) setOrientation(btn.dataset.orient);
   });
 
   window.addEventListener('keydown', (e) => {
@@ -1089,9 +1130,18 @@ function placeTimeline() {
 }
 function updateOrientButton() {
   const btn = $('#orient');
-  if (!btn) return;
-  btn.textContent = isH() ? '竖' : '横';
-  btn.title = isH() ? '切换到竖版' : '切换到横版';
+  if (btn) {
+    btn.textContent = isH() ? '竖' : '横';
+    btn.title = isH() ? '切换到竖版' : '切换到横版';
+  }
+  const toggle = $('#orient-toggle');
+  if (!toggle) return;
+  toggle.dataset.active = orientation;
+  toggle.querySelectorAll('button[data-orient]').forEach((b) => {
+    const on = b.dataset.orient === orientation;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
 }
 function setOrientation(next) {
   orientation = next;
@@ -1116,12 +1166,8 @@ function setMode(mode) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', String(on));
   });
-  // 竖版单按钮：显示要切换到的目标视角
-  const single = $('#mode-single');
-  if (single) {
-    single.textContent = mode === 'local' ? '远端' : '本地';
-    single.title = mode === 'local' ? '切换到远端视角' : '切换到本地视角';
-  }
+  // 两套视角的名字靠 CSS 显隐，切换后重新量一次宽度
+  if (!isH() && lastLayout) requestAnimationFrame(() => fitVerticalChips(lastLayout.svgW));
 }
 
 async function refresh() {

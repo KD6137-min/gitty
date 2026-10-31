@@ -30,10 +30,16 @@
         </div>
         <div class="h-right">
           <div class="shortcuts" aria-hidden="true"><kbd>T</kbd><span>视角</span><kbd>F</kbd><span>聚焦</span><kbd>R</kbd><span>刷新</span></div>
-          <button id="fetch" class="tool-btn" title="git fetch --all --prune">FETCH</button>
-          <button id="auto" class="tool-btn" title="每 60 秒自动 fetch">AUTO</button>
+          <div class="fetch-group">
+            <button id="fetch" class="tool-btn" title="git fetch --all --prune">FETCH</button>
+            <button id="auto" class="tool-btn" title="每 60 秒自动 fetch">AUTO</button>
+          </div>
           <button id="orient" class="tool-btn" title="切换到竖版">竖</button>
-          <button id="mode-single" class="tool-btn mode-single" title="切换到远端视角">远端</button>
+          <div id="orient-toggle" class="mode-toggle orient-toggle" data-active="h" role="group" aria-label="方向：横 / 竖">
+            <span class="pill" aria-hidden="true"></span>
+            <button type="button" data-orient="h" class="on" aria-pressed="true">横</button>
+            <button type="button" data-orient="v" aria-pressed="false">竖</button>
+          </div>
           <div id="notice" class="notice" hidden></div>
           <div class="mode-toggle" id="mode-toggle" data-active="local" role="group" aria-label="视角：本地 / 远端">
             <span class="pill" aria-hidden="true"></span>
