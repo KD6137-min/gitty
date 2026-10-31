@@ -92,8 +92,8 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 }
 
 /* —— 竖版：左侧竖条，时间轴竖直（最新在上），车道为列 —— */
-html[data-orient="v"] body { min-width: 0; align-items: flex-start; }
-html[data-orient="v"] .radar { width: 315px; height: 100vh; }
+html[data-orient="v"] body { min-width: 0; align-items: flex-start; overflow-x: hidden; }
+html[data-orient="v"] .radar { width: 315px; height: 100vh; overflow: hidden; }
 html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
 html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
 html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
@@ -112,7 +112,8 @@ html[data-orient="v"] .timeline .tl-line {
   background: repeating-linear-gradient(180deg, rgba(237, 233, 222, .38) 0 2px, transparent 2px 7px);
 }
 html[data-orient="v"] .tl-mark { left: 50%; top: auto; }
-html[data-orient="v"] .repo-menu { width: 290px; max-width: 90vw; }
+/* 竖版：菜单右对齐并限制在竖条内，避免撑出横向滚动条 */
+html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(100vw - 20px)); max-width: none; }
 /* 连接状态点：正常时隐藏，服务断开才显示红点 */
 /* 连接状态：常亮小点，正常暗白、断线变红 */
 .status { flex: none; width: 8px; height: 8px; border-radius: 50%; background: rgba(237, 233, 222, .28); transition: background .3s ease, box-shadow .3s ease; }
