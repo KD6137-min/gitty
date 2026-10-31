@@ -73,10 +73,15 @@ function topoSort(commits) {
 }
 
 // 汇入边的统一几何：圆角出发 + 直线斜线接入目标提交（与本地完全一致）
-function mergePath(px, py, cx, cy) {
+// blockerX：同一行上挡在父子之间的最近节点。此时提前拐弯，避免斜线贴着
+// 那个节点，让人误以为边是从它连出来的。
+function mergePath(px, py, cx, cy, blockerX = null) {
   const dx = cx - px;
   const dy = cy - py;
-  const run = Math.max(22, Math.min(dx * 0.5, Math.abs(dy) * 0.9));
+  const natural = Math.max(22, Math.min(dx * 0.5, Math.abs(dy) * 0.9));
+  const run = blockerX == null
+    ? natural
+    : Math.min(natural, Math.max(8, Math.abs(blockerX - px) * 0.22));
   const r = Math.min(10, run * 0.55);
   const ax = px + run;
   const bx = cx - ax;
@@ -247,6 +252,22 @@ function layout(data, viewportW, viewportH) {
     for (const h of ch.commits) rowOf.set(h, r);
   }
 
+  // 每一行上的节点 x，用于汇入边避让同排节点
+  const xsByRow = new Map();
+  for (const c of commits) {
+    const r = rowOf.get(c.hash);
+    if (r === undefined || chainKindOf(c.hash) === 'ghost') continue;
+    if (!xsByRow.has(r)) xsByRow.set(r, []);
+    xsByRow.get(r).push(xOf.get(c.hash));
+  }
+  for (const arr of xsByRow.values()) arr.sort((a, b) => a - b);
+  const blockerOnRow = (row, px, cx) => {
+    const xs = xsByRow.get(row) || [];
+    if (cx > px) return xs.find((x) => x > px + 5 && x < cx - 5) ?? null;
+    if (cx < px) return [...xs].reverse().find((x) => x < px - 5 && x > cx + 5) ?? null;
+    return null;
+  };
+
   // —— 边：同车道横线；分叉=垂直+圆角；汇入=圆角出发+直线斜线 ——
   const edges = [];
   for (const c of commits) {
@@ -272,7 +293,10 @@ function layout(data, viewportW, viewportH) {
         const d = `M ${S(px)} ${S(py)} L ${S(px)} ${S(cy - dirY * rr)} Q ${S(px)} ${S(cy)} ${S(px + rr)} ${S(cy)} L ${S(cx)} ${S(cy)}`;
         edges.push({ kind: 'path', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, d, color });
       } else {
-        edges.push({ kind: 'path', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, d: mergePath(px, py, cx, cy), color });
+        // 汇入线从 parent 行出发；若同一行紧挨着另一个提交，提前拐弯，
+        // 避免斜线贴着那个提交，看起来像边是从它连出来的。
+        const blockerX = blockerOnRow(pr, px, cx);
+        edges.push({ kind: 'path', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, d: mergePath(px, py, cx, cy, blockerX), color });
       }
     });
   }
@@ -351,7 +375,8 @@ function layout(data, viewportW, viewportH) {
         if (idx === 0 || !inWin.has(p)) return;
         const pr = rowOf.get(p);
         if (pr === undefined) return;
-        remoteExtraEdges.push({ kind: 'path', chain: chainOf.get(head.hash), d: mergePath(xOf.get(p), rowY(pr), xOf.get(h), cy), color: chainColorOf(p) });
+        const px = xOf.get(p), rx = xOf.get(h);
+        remoteExtraEdges.push({ kind: 'path', chain: chainOf.get(head.hash), d: mergePath(px, rowY(pr), rx, cy, blockerOnRow(pr, px, rx)), color: chainColorOf(p) });
       });
     }
     // 只画远端独有段 + 第一个共享提交（衔接进共享图）；共享部分由本地边复用
@@ -419,7 +444,7 @@ function layout(data, viewportW, viewportH) {
 
   // —— 玻璃带：分歧区，两端半圆端帽的圆心与两端提交重合 ——
   // 这样空心大圆到带子的上 / 下 / 右边缘距离一致，看起来是同一个圆心的同心关系
-  const panelH = clamp(rowH * 0.68, 20, 30) || 24;
+  const panelH = clamp(rowH * 0.78, 20, 34) || 26;
   const panels = [];
   for (const ch of remoteChains) {
     if (ch.kind === 'shadow' && ch.ahead === 0 && ch.behind === 0) continue;
@@ -581,7 +606,9 @@ function render(data) {
     const chainId = L.chainOf.get(head.hash);
     // 当前分支：名字后面加一个小菱形标记（加粗在深色描边下太不明显）
     const curMark = isCur ? '<tspan class="chip-head" dx="10" dy="3">◆</tspan>' : '';
-    chips.push(`<text class="chip chip-local${cur}${dim(chainId)}" data-chain="${esc(chainId)}" x="${S(lx + 16)}" y="${S(ly + 6.5)}" style="fill:${color}">${esc(head.name)}${aliasTxt}${curMark}</text>`);
+    // 分叉时远端尖端可能在本地尖端右侧，名字要放到两者之后，别盖住远端提交
+    const labelX = Math.max(lx, st && st.inWindow && st.upX != null ? st.upX : lx);
+    chips.push(`<text class="chip chip-local${cur}${dim(chainId)}" data-chain="${esc(chainId)}" x="${S(labelX + 16)}" y="${S(ly + 6.5)}" style="fill:${color}">${esc(head.name)}${aliasTxt}${curMark}</text>`);
     // 远端视角只显示真正的 upstream 名；没有 upstream 的本地分支在远端不存在，不显示
     if (st && st.upstream) {
       const rx = st.inWindow && st.upX != null ? st.upX : lx;
