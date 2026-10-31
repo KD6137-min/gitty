@@ -36,7 +36,8 @@ fn server_ready() -> bool {
 fn read_last_repo(dir: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(dir.join(".recent-repos.json")).ok()?;
     let list: Vec<String> = serde_json::from_str(&raw).ok()?;
-    list.into_iter().next()
+    // 跳过已经不存在的仓库和首次启动时误记的应用资源目录
+    list.into_iter().find(|p| Path::new(p).join(".git").exists())
 }
 
 /// Node 可执行文件。macOS GUI 应用从 Finder 启动时 PATH 不含 Homebrew，
@@ -201,7 +202,9 @@ fn set_bottom(hwnd_addr: isize) {
 #[cfg(target_os = "macos")]
 fn apply_bar_macos(window: &tauri::WebviewWindow) {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSScreen, NSWindow};
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSScreen, NSWindow,
+    };
     use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -230,6 +233,10 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
     // SAFETY: ns_window 是 Tauri 返回的有效 NSWindow 指针，且 setup 运行在主线程。
     unsafe {
         let ns_window = &*(ns_window as *const NSWindow);
+        // 强制深色外观，否则浅色系统下 HUD 毛玻璃会发白、灰字看不清
+        if let Some(appearance) = NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua) {
+            ns_window.setAppearance(Some(&appearance));
+        }
         ns_window.setFrame_display(frame, true);
         ns_window.setLevel(level);
     }
@@ -311,6 +318,8 @@ fn main() {
             // macOS：原生毛玻璃 + 贴主屏底部（Dock 之上）
             #[cfg(target_os = "macos")]
             {
+                // 先设深色窗口外观和桌面层级，再挂 vibrancy（材质会继承窗口外观）
+                apply_bar_macos(&window);
                 // HUD 材质 + Active 状态：附件应用几乎不会成为活跃窗口，
                 // 固定 Active 才能一直保持毛玻璃的鲜明效果。
                 if let Err(err) = window_vibrancy::apply_vibrancy(
@@ -321,7 +330,6 @@ fn main() {
                 ) {
                     eprintln!("apply_vibrancy failed: {err}");
                 }
-                apply_bar_macos(&window);
             }
 
             Ok(())

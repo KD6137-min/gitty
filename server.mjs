@@ -18,7 +18,10 @@ let revision = 0;
 function readRecent() {
   try {
     const list = JSON.parse(readFileSync(RECENT_FILE, 'utf8'));
-    return Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
+    // 只保留仍然存在的 Git 仓库，避免把应用资源目录之类的无效路径列出来
+    return Array.isArray(list)
+      ? list.filter((p) => typeof p === 'string' && existsSync(join(p, '.git')))
+      : [];
   } catch { return []; }
 }
 function addRecent(p) {
@@ -27,7 +30,8 @@ function addRecent(p) {
     writeFileSync(RECENT_FILE, JSON.stringify(list, null, 2));
   } catch { /* 写不了就只用内存里的 */ }
 }
-addRecent(root);
+// 只有真正打开了一个 Git 仓库才记入最近列表；首次启动的 cwd 可能是应用资源目录
+if (existsSync(join(root, '.git'))) addRecent(root);
 
 function readJsonBody(req) {
   return new Promise((resolveBody, reject) => {

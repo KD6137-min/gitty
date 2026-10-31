@@ -475,6 +475,7 @@ function render(data) {
 
   $('#repo-label').textContent = shortRepo(data.repo);
   $('#repo').title = `${data.repo.replace(/\\/g, '/')}\n点击切换仓库`;
+  $('#repo').classList.remove('needs-repo');
 
   // 工作区状态：已暂存 / 未暂存 / 未跟踪
   const wt = data.status || { staged: 0, unstaged: 0, untracked: 0 };
@@ -491,7 +492,9 @@ function render(data) {
     wtEl.hidden = true;
   }
   if (!L.commits.length) {
-    $('#empty').hidden = false; $('#graph').hidden = true;
+    $('#empty').hidden = false;
+    $('#empty').innerHTML = '<div class="empty-title">这个仓库还没有提交</div><div class="empty-hint">提交之后分支雷达会自动出现</div>';
+    $('#graph').hidden = true;
     return;
   }
   $('#empty').hidden = true; $('#graph').hidden = false;
@@ -1028,8 +1031,10 @@ async function refresh() {
     if (!lastData) {
       const empty = $('#empty');
       empty.hidden = false;
-      empty.textContent = `${error.message} · 点击上方路径选择一个 Git 仓库`;
+      empty.innerHTML = '<div class="empty-title">点击上方路径框选择一个 Git 仓库</div><div class="empty-hint">只读访问 · 支持任意本地 Git 仓库</div>';
       $('#graph').hidden = true;
+      $('#repo-label').textContent = '选择 Git 仓库';
+      $('#repo').classList.add('needs-repo');
     }
     console.error(error);
   }

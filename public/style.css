@@ -14,8 +14,9 @@ html, body { height: 100%; }
 html.tauri, html.tauri body { background: transparent !important; }
 /* Tauri 里由系统 Acrylic / vibrancy 提供模糊，CSS 只留很轻的暗色叠加 */
 html.tauri .radar { background: rgba(18, 18, 16, .22); -webkit-backdrop-filter: none; backdrop-filter: none; }
-/* macOS：与 NSVisualEffectView 的 16px 圆角保持一致（顶部两角） */
-html.tauri-macos .radar { border-radius: 16px 16px 0 0; overflow: hidden; }
+/* macOS：深色 vibrancy 下再压一层暗色，保证灰色文字清晰；圆角与 NSVisualEffectView 一致 */
+html.tauri-macos { color-scheme: dark; }
+html.tauri-macos .radar { background: rgba(18, 18, 16, .42); border-radius: 16px 16px 0 0; overflow: hidden; }
 body {
   margin: 0; min-width: 640px; background: #C6C2B8; color: var(--ink);
   font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
@@ -39,9 +40,20 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 .brand { display: flex; align-items: center; gap: 11px; font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; font-weight: 700; letter-spacing: .16em; font-size: 20px; color: var(--ink); }
 .brand-mark { width: 14px; height: 14px; background: var(--red); display: block; transform: rotate(45deg); }
 .repo-wrap { position: relative; flex: 0 1 280px; min-width: 0; max-width: 280px; }
-.repo { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; padding: 0; color: #CFCBC0; font-size: 15px; letter-spacing: .01em; text-align: left; cursor: pointer; }
+.repo {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 11px; border: 1px solid rgba(237, 233, 222, .18); border-radius: 9px;
+  background: rgba(255, 255, 255, .07); color: #D9D5CA;
+  font-size: 14px; font-weight: 600; letter-spacing: .01em; text-align: left; cursor: pointer;
+}
+.repo:hover { background: rgba(255, 255, 255, .13); border-color: rgba(237, 233, 222, .34); color: var(--ink); }
+.repo:focus-visible { outline: 2px solid rgba(255, 107, 85, .65); outline-offset: 2px; }
+/* 还没有仓库时高亮成红色，提示这里可以点击 */
+.repo.needs-repo { border-color: rgba(255, 107, 85, .55); background: rgba(255, 107, 85, .12); color: var(--ink); }
+.repo.needs-repo:hover { background: rgba(255, 107, 85, .20); }
 #repo-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.repo i { flex: none; font-style: normal; color: var(--muted); font-size: 11px; }
+.repo i { flex: none; margin-left: auto; font-style: normal; color: var(--muted); font-size: 12px; }
+.repo.needs-repo i { color: var(--red); }
 
 /* 仓库切换下拉：深色玻璃面板 */
 .repo-menu { position: absolute; top: calc(100% + 12px); left: 0; width: 380px; max-width: 72vw; z-index: 40; padding: 10px; background: rgba(20, 20, 18, .96); border: 1px solid var(--hair); border-radius: 10px; box-shadow: 0 18px 44px rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
@@ -73,8 +85,8 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 .tl-line { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: repeating-linear-gradient(90deg, rgba(237, 233, 222, .38) 0 2px, transparent 2px 7px); }
 .tl-mark { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; }
 .tl-view {
-  position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
-  background: var(--dot, var(--red)); border: 1.5px solid rgba(20, 20, 18, .95);
+  position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  background: var(--dot, var(--red)); border: 2px solid rgba(20, 20, 18, .95);
   border-radius: 1px; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(20, 20, 18, .22);
 }
 /* 连接状态点：正常时隐藏，服务断开才显示红点 */
@@ -116,7 +128,9 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 .mode-toggle[data-active="remote"] button[data-mode="remote"] { color: #141412; }
 .mode-toggle button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 999px; }
 
-.empty { flex: 1; display: grid; place-items: center; font-size: 14px; color: var(--muted); }
+.empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; font-size: 15px; color: #CFCBC0; letter-spacing: .02em; }
+.empty-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.empty-hint { font-size: 12px; color: var(--muted); letter-spacing: .04em; }
 
 .graph { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 /* 不放滚动条：横向靠滚轮/触控板，纵向由行高压缩解决 */
