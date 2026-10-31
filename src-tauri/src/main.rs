@@ -250,6 +250,36 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
     }
 }
 
+/// 菜单栏用的 18pt 菱形模板图：黑色形状 + alpha，系统会自动适配浅色/深色菜单栏。
+#[cfg(target_os = "macos")]
+fn tray_diamond_icon() -> tauri::image::Image<'static> {
+    const SIZE: u32 = 32;
+    const SAMPLES: u32 = 4;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let center = (SIZE as f64 - 1.0) / 2.0;
+    let radius = 13.0;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let mut hits = 0u32;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let px = x as f64 + (sx as f64 + 0.5) / SAMPLES as f64;
+                    let py = y as f64 + (sy as f64 + 0.5) / SAMPLES as f64;
+                    if (px - center).abs() + (py - center).abs() <= radius {
+                        hits += 1;
+                    }
+                }
+            }
+            if hits > 0 {
+                let alpha = (hits as f64 / (SAMPLES * SAMPLES) as f64 * 255.0).round() as u8;
+                let i = ((y * SIZE + x) * 4) as usize;
+                rgba[i + 3] = alpha;
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+}
+
 /// macOS 菜单栏图标：附件应用没有 Dock 图标和窗口装饰，用它来显示/隐藏/退出。
 #[cfg(target_os = "macos")]
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -264,7 +294,8 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .build()?;
 
     TrayIconBuilder::with_id("gitty-tray")
-        .title("Gitty")
+        .icon(tray_diamond_icon())
+        .icon_as_template(true)
         .tooltip("Gitty — 显示 / 隐藏 / 退出")
         .menu(&menu)
         .show_menu_on_left_click(true)
