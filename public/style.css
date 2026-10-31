@@ -97,10 +97,12 @@ html[data-orient="v"] .radar { width: 315px; height: 100vh; overflow: hidden; }
 html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
 html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
 html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
-html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: center; flex-wrap: wrap; gap: 10px; }
 html[data-orient="v"] .shortcuts { display: none; }
 html[data-orient="v"] .mode-toggle { width: 112px; height: 28px; }
-html[data-orient="v"] .status { margin-left: 0; }
+/* 竖版：按钮行居中并适当放大；状态点固定在右上角 */
+html[data-orient="v"] .tool-btn { font-size: 12px; padding: 6px 12px; }
+html[data-orient="v"] .status { position: absolute; right: 12px; top: 16px; margin: 0; }
 html[data-orient="v"] .graph { min-height: 0; }
 html[data-orient="v"] .scroll { right: 26px; }
 html[data-orient="v"] .timeline {
@@ -225,9 +227,9 @@ html[data-mode="remote"] .front-remote .remote-line { stroke-width: 2.4; stroke-
 .chip.current { font-weight: 700; }
 .chip-head { font-size: 24px; }
 /* 竖版：水平两行的分支名 */
-.chip-v { font-size: 10px; stroke-width: 2.5px; }
-.chip-v .chip-count { font-size: 8px; }
-.chip-v .chip-head { font-size: 10px; }
+.chip-v { font-size: 12px; stroke-width: 3px; }
+.chip-v .chip-count { font-size: 10px; }
+.chip-v .chip-head { font-size: 14px; }
 /* 竖版用单按钮替代「本地 / 远端」分段开关 */
 .mode-single { display: none; }
 html[data-orient="v"] .mode-single { display: inline-block; }

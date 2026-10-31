@@ -619,7 +619,7 @@ function render(data) {
     if (!l2) {
       return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 12)}" text-anchor="middle" style="fill:${color}">${esc(l1)}${extraHtml}</text>`;
     }
-    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}"><tspan x="${S(x)}" y="${S(y - 24)}">${esc(l1)}</tspan><tspan x="${S(x)}" y="${S(y - 12)}">${esc(l2)}${extraHtml}</tspan></text>`;
+    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}"><tspan x="${S(x)}" y="${S(y - 26)}">${esc(l1)}/</tspan><tspan x="${S(x)}" y="${S(y - 12)}">${esc(l2)}${extraHtml}</tspan></text>`;
   };
   for (const head of L.locals) {
     const lane = L.laneOf.get(head.hash);
