@@ -85,10 +85,34 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 .tl-line { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: repeating-linear-gradient(90deg, rgba(237, 233, 222, .38) 0 2px, transparent 2px 7px); }
 .tl-mark { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; }
 .tl-view {
-  position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  position: absolute; width: 12px; height: 12px; margin: 0;
   background: var(--dot, var(--red)); border: 2px solid rgba(20, 20, 18, .95);
-  border-radius: 1px; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(20, 20, 18, .22);
+  border-radius: 1px; transform: translate(-50%, -50%) rotate(45deg);
+  box-shadow: 0 0 0 2px rgba(20, 20, 18, .22);
 }
+
+/* —— 竖版：左侧竖条，时间轴竖直（最新在上），车道为列 —— */
+html[data-orient="v"] body { min-width: 0; align-items: flex-start; }
+html[data-orient="v"] .radar { width: 315px; height: 100vh; }
+html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
+html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
+html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
+html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+html[data-orient="v"] .shortcuts { display: none; }
+html[data-orient="v"] .mode-toggle { width: 112px; height: 28px; }
+html[data-orient="v"] .status { margin-left: 0; }
+html[data-orient="v"] .graph { min-height: 0; }
+html[data-orient="v"] .scroll { right: 26px; }
+html[data-orient="v"] .timeline {
+  position: absolute; right: 4px; top: 8px; bottom: 8px; left: auto;
+  width: 18px; height: auto; max-width: none; transform: none; justify-self: auto;
+}
+html[data-orient="v"] .timeline .tl-line {
+  top: 0; bottom: 0; left: 50%; right: auto; width: 1px; height: auto;
+  background: repeating-linear-gradient(180deg, rgba(237, 233, 222, .38) 0 2px, transparent 2px 7px);
+}
+html[data-orient="v"] .tl-mark { left: 50%; top: auto; }
+html[data-orient="v"] .repo-menu { width: 290px; max-width: 90vw; }
 /* 连接状态点：正常时隐藏，服务断开才显示红点 */
 /* 连接状态：常亮小点，正常暗白、断线变红 */
 .status { flex: none; width: 8px; height: 8px; border-radius: 50%; background: rgba(237, 233, 222, .28); transition: background .3s ease, box-shadow .3s ease; }
@@ -101,8 +125,8 @@ header { position: relative; height: 48px; flex: none; display: grid; grid-templ
 
 /* 新提交提示：与整体一致的玻璃胶囊，占位于右侧控件之间，不会盖住按钮 */
 #notice { flex: none; padding: 5px 11px; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid var(--hair); color: var(--ink); font-size: 11px; letter-spacing: .03em; white-space: nowrap; }
-@media (max-width: 1150px) { .shortcuts { display: none; } }
-@media (max-width: 900px) { .timeline { display: none; } }
+@media (max-width: 1150px) { html[data-orient="h"] .shortcuts { display: none; } }
+@media (max-width: 900px) { html[data-orient="h"] .timeline { display: none; } }
 
 /* 视角切换：玻璃胶囊 + 滑动亮色药丸（放在顶栏最右） */
 .mode-toggle {
@@ -232,4 +256,4 @@ html[data-mode="remote"] .chip-ghost { display: inline; opacity: 1; }
 #tip span { display: block; color: #4A473F; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tip em { display: block; color: #7A766C; font-style: normal; margin-top: 3px; }
 
-@media (max-width: 720px) { body { min-width: 0; } .repo { display: none; } }
+@media (max-width: 720px) { body { min-width: 0; } html[data-orient="h"] .repo { display: none; } }

@@ -6,6 +6,7 @@ use std::time::Duration;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 const BAR_HEIGHT: f64 = 315.0;
+const BAR_WIDTH: f64 = 315.0;
 
 /// 随应用启动的 Node 服务；退出时杀掉，避免留下占用 4173 的孤儿进程。
 struct ServerProcess(std::sync::Mutex<Option<std::process::Child>>);
@@ -132,10 +133,9 @@ fn work_area() -> Option<(f64, f64, f64, f64)> {
     (ok != 0).then(|| (rect.left as f64, rect.top as f64, rect.right as f64, rect.bottom as f64))
 }
 
-/// 启动时把窗口摆到主屏工作区底部（只做一次）。
-/// Tauri 的 set_size/set_position 在创建阶段会被窗口管理器覆盖，这里用 Win32 强制定位。
+/// 把窗口摆到指定矩形，并压到 z 序最底
 #[cfg(windows)]
-fn apply_bar(hwnd_addr: isize, scale: f64) {
+fn place(hwnd_addr: isize, x: i32, y: i32, w: i32, h: i32) {
     #[link(name = "user32")]
     extern "system" {
         fn SetWindowPos(
@@ -149,29 +149,75 @@ fn apply_bar(hwnd_addr: isize, scale: f64) {
         ) -> i32;
     }
     const SWP_NOACTIVATE: u32 = 0x0010;
+    unsafe {
+        SetWindowPos(
+            hwnd_addr as *mut core::ffi::c_void,
+            1usize as *mut core::ffi::c_void, // HWND_BOTTOM
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// 启动时把窗口摆到主屏工作区底部（只做一次）。
+/// Tauri 的 set_size/set_position 在创建阶段会被窗口管理器覆盖，这里用 Win32 强制定位。
+#[cfg(windows)]
+fn apply_bar(hwnd_addr: isize, scale: f64) {
     // 线程里从 isize 重新构造指针（原始指针不是 Send）
     std::thread::spawn(move || {
         let bar_h = (BAR_HEIGHT * scale).round() as i32;
         loop {
             if let Some((left, _top, right, bottom_y)) = work_area() {
-                let hwnd = hwnd_addr as *mut core::ffi::c_void;
-                let bottom = 1usize as *mut core::ffi::c_void; // HWND_BOTTOM
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        bottom,
-                        left.round() as i32,
-                        bottom_y.round() as i32 - bar_h,
-                        (right - left).round() as i32,
-                        bar_h,
-                        SWP_NOACTIVATE,
-                    );
-                }
+                place(
+                    hwnd_addr,
+                    left.round() as i32,
+                    bottom_y.round() as i32 - bar_h,
+                    (right - left).round() as i32,
+                    bar_h,
+                );
                 break;
             }
             std::thread::sleep(Duration::from_millis(200));
         }
     });
+}
+
+/// 前端切换横/竖版：横向=底部全宽横条，竖向=左侧全高竖条
+#[tauri::command]
+fn set_orientation(window: tauri::WebviewWindow, orientation: String) {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                let addr = h.hwnd.get();
+                let scale = window.scale_factor().unwrap_or(1.0);
+                if let Some((left, top, right, bottom)) = work_area() {
+                    let bar_h = (BAR_HEIGHT * scale).round() as i32;
+                    let bar_w = (BAR_WIDTH * scale).round() as i32;
+                    let (x, y, w, hh) = if orientation == "v" {
+                        (left.round() as i32, top.round() as i32, bar_w, (bottom - top).round() as i32)
+                    } else {
+                        (left.round() as i32, bottom.round() as i32 - bar_h, (right - left).round() as i32, bar_h)
+                    };
+                    place(addr, x, y, w, hh);
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let vertical = orientation == "v";
+        let win = window.clone();
+        let _ = window.run_on_main_thread(move || place_macos(&win, vertical));
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (window, orientation);
+    }
 }
 
 /// 只把窗口压回 z 序最底，不改位置和大小（点击后调用，平时不调用，避免闪烁）
@@ -205,10 +251,10 @@ fn set_bottom(hwnd_addr: isize) {
     }
 }
 
-/// macOS：把窗口铺到主屏可用区域（NSScreen.visibleFrame，已扣掉菜单栏和 Dock）的底部。
-/// 高度沿用 BAR_HEIGHT（逻辑点），窗口 x 从 visibleFrame 左边缘开始，宽度铺满。
+/// macOS：把窗口铺到主屏可用区域（NSScreen.visibleFrame，已扣掉菜单栏和 Dock）。
+/// 横向贴底（全宽 × BAR_HEIGHT），竖向贴左（BAR_WIDTH × 全高）。
 #[cfg(target_os = "macos")]
-fn apply_bar_macos(window: &tauri::WebviewWindow) {
+fn place_macos(window: &tauri::WebviewWindow, vertical: bool) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSScreen, NSWindow,
@@ -223,16 +269,17 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
         return;
     }
 
-    let height = BAR_HEIGHT.min(visible.size.height);
+    let (width, height) = if vertical {
+        (BAR_WIDTH.min(visible.size.width), visible.size.height)
+    } else {
+        (visible.size.width, BAR_HEIGHT.min(visible.size.height))
+    };
     let frame = NSRect {
         origin: NSPoint {
             x: visible.origin.x,
             y: visible.origin.y,
         },
-        size: NSSize {
-            width: visible.size.width,
-            height,
-        },
+        size: NSSize { width, height },
     };
     // 比普通窗口低一层（-1）：普通窗口始终盖在它上面，但它能接收点击。
     // 更低的桌面层级会被 Finder 桌面窗口吞掉鼠标事件。
@@ -331,6 +378,7 @@ fn cleanup_server(app: &tauri::AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![set_orientation])
         .setup(|app| {
             // macOS：附件应用，不显示 Dock 图标，也不参与 Cmd+Tab
             #[cfg(target_os = "macos")]
@@ -362,7 +410,8 @@ fn main() {
             let server = root.and_then(|root| spawn_server(&root, data_dir, last_repo));
             app.manage(ServerProcess(std::sync::Mutex::new(server)));
 
-            let url = WebviewUrl::External("http://localhost:4173".parse().expect("url"));
+            // 界面用 Tauri 内置资源加载（本地来源，IPC 命令可用）
+            let url = WebviewUrl::App("index.html".into());
             #[allow(unused_mut)]
             let mut builder = WebviewWindowBuilder::new(app, "main", url)
                 .title("Gitty")
@@ -409,7 +458,7 @@ fn main() {
             // macOS：原生毛玻璃 + 贴主屏底部（Dock 之上）
             #[cfg(target_os = "macos")]
             {
-                apply_bar_macos(&window);
+                place_macos(&window, false);
                 // HUD 材质 + Active 状态：附件应用几乎不会成为活跃窗口，
                 // 固定 Active 才能一直保持毛玻璃的鲜明效果。
                 if let Err(err) = window_vibrancy::apply_vibrancy(

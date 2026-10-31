@@ -1,66 +1,68 @@
-// Gitty 前端：分支雷达
+// Gitty 前端：分支雷达（横 / 竖两种方向）
+// 布局把「时间轴」和「车道轴」抽象成两个方向：
+//   横向：时间 = x（最新在右），车道 = y（自上而下）
+//   竖向：时间 = y（最新在上），车道 = x（自左而右）
 // 点线语言：
-//   本地提交 = 实心彩色小圆点；分支尖端稍大
-//   远端提交 = 空心大圆环，与本地同心；圆环内部用 mask 挖空，线不穿环
-//   共有提交 = 大圆套小点；只有远端 = 空环；只有本地 = 小点
-// 车道：每条 first-parent 链占一段 x 区间，区间不重叠的链共享同一行（装箱压缩）。
+//   本地提交 = 实心彩色小圆点；远端提交 = 空心圆环（环内镂空，线不穿环）
+//   共有提交 = 大圆套小点；tag = 指向提交的三角 + 标签名
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const S = (v) => Number(v).toFixed(1);
 
-// 在 Tauri 壳里运行时让页面背景透明，毛玻璃才能真正透出桌面
-if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+const isTauri = !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
+if (isTauri) {
   document.documentElement.classList.add('tauri');
-  // macOS 的 vibrancy 视图圆角为 16，页面叠加层同步圆角，避免四角露出深色方块
-  if (/Macintosh/.test(navigator.userAgent)) {
-    document.documentElement.classList.add('tauri-macos');
-  }
+  // macOS vibrancy 视图圆角为 16，页面叠加层同步圆角，避免四角露出深色方块
+  if (/Macintosh/.test(navigator.userAgent)) document.documentElement.classList.add('tauri-macos');
 }
+// Tauri 内置资源来源需要显式指向本地 Node 服务；浏览器里用同源
+const API = isTauri ? 'http://localhost:4173' : '';
+
+const qsOrient = new URLSearchParams(location.search).get('orient');
+let orientation = qsOrient === 'v' || qsOrient === 'h'
+  ? qsOrient
+  : (localStorage.getItem('gitty-orient') === 'v' ? 'v' : 'h');
+document.documentElement.dataset.orient = orientation;
+const isH = () => orientation === 'h';
 
 // —— 布局常量（像素，与 viewBox 1:1）——
-const MARGIN_X = 30;
-const MARGIN_Y = 26;      // 上下留白要容得下玻璃带和圆环，避免突破窗口
-const TAIL = 240;         // 右侧名字预留
-const ROW_MIN = 14;
-const ROW_MAX = 60;
-const MIN_SPACING = 44;
-const MAX_SPACING = 130;
-const PAD_L = 140;        // 装箱时给起点标注预留
-const PAD_R = 240;        // 装箱时给尖端名字预留
-const CORNER = 12;
-// 包豪斯配色：暖白 + 原色（红/蓝/黄）+ 间色（橙/绿/紫），相邻项冷暖交替，便于区分
+const MARGIN_TIME = 30;    // 时间轴两端留白（横：左右；竖：上下底）
+const MARGIN_LANE = 26;    // 车道轴两端留白（横：上下；竖：左右）
+const TAIL_H = 240;        // 横版右侧名字预留
+const TAIL_TOP = 150;      // 竖版顶部（旋转名字）预留
+const TAIL_BOTTOM = 60;    // 竖版底部预留
+const ROW_MIN = 14, ROW_MAX = 60;   // 横版行高
+const COL_MIN = 28, COL_MAX = 80;   // 竖版列宽
+const TIME_MIN = 44, TIME_MAX = 130; // 时间轴间距
+const PAD_NEWER_H = 240, PAD_OLDER_H = 140;  // 横版装箱预留（右/左）
+const PAD_NEWER_V = 150, PAD_OLDER_V = 60;   // 竖版装箱预留（上/下）
 const COLORS = [
   '#EDE9DE', '#FF6B55', '#6D9BFF', '#F5C542', '#B98CFF',
   '#4FD1B0', '#FF9F43', '#7BD389', '#FF8FB1', '#64D8E0',
   '#9B5DE5', '#FEE440', '#00BBF9', '#E76F51', '#00F5D4',
   '#F15BB5', '#2A9D8F', '#E9C46A', '#A06CD5', '#D4A373',
 ];
-// 超出调色板后按黄金角生成不同色相，避免撞色
 const colorAt = (i) => (i < COLORS.length ? COLORS[i] : `hsl(${Math.round((i * 137.508) % 360)}, 68%, 70%)`);
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const chainColors = new Map();
 const seen = new Set();
-let focusChain = null;   // 聚焦模式：只亮出某条链
-let firstLoad = true;    // 首次渲染不播动画、不弹新提交提示
+let focusChain = null;
+let firstLoad = true;
 const dim = (chain) => (focusChain && chain !== focusChain ? ' dim' : '');
 
-// 拓扑排序：子提交永远排在父提交前面
 function topoSort(commits) {
   const inWin = new Set(commits.map((c) => c.hash));
   const indeg = new Map();
   for (const c of commits) indeg.set(c.hash, 0);
-  for (const c of commits) for (const p of c.parents) {
-    if (inWin.has(p)) indeg.set(p, indeg.get(p) + 1);
-  }
+  for (const c of commits) for (const p of c.parents) if (inWin.has(p)) indeg.set(p, indeg.get(p) + 1);
   const used = new Set();
   const out = [];
   while (out.length < commits.length) {
     let pick = -1;
     for (let i = 0; i < commits.length; i++) {
-      const h = commits[i].hash;
-      if (!used.has(h) && indeg.get(h) === 0) { pick = i; break; }
+      if (!used.has(commits[i].hash) && indeg.get(commits[i].hash) === 0) { pick = i; break; }
     }
     if (pick === -1) break;
     const c = commits[pick];
@@ -72,26 +74,42 @@ function topoSort(commits) {
   return out;
 }
 
-// 汇入边的统一几何：圆角出发 + 直线斜线接入目标提交（与本地完全一致）
-// blockerX：同一行上挡在父子之间的最近节点。此时提前拐弯，避免斜线贴着
-// 那个节点，让人误以为边是从它连出来的。
-function mergePath(px, py, cx, cy, blockerX = null) {
-  const dx = cx - px;
-  const dy = cy - py;
-  const natural = Math.max(22, Math.min(dx * 0.5, Math.abs(dy) * 0.9));
-  const run = blockerX == null
+// —— 分叉 / 汇入的通用几何（在最终坐标里构建）——
+function branchPath(p, c) {
+  const h = isH();
+  const laneDelta = h ? c.y - p.y : c.x - p.x;
+  const timeDelta = h ? c.x - p.x : c.y - p.y;
+  const ls = Math.sign(laneDelta) || 1;
+  const ts = Math.sign(timeDelta) || 1;
+  const rr = Math.min(12, Math.abs(laneDelta) * 0.45, Math.abs(timeDelta) * 0.45);
+  const a = h ? { x: p.x, y: c.y } : { x: c.x, y: p.y };
+  const pre = h ? { x: a.x, y: a.y - ls * rr } : { x: a.x - ls * rr, y: a.y };
+  const post = h ? { x: a.x + ts * rr, y: a.y } : { x: a.x, y: a.y + ts * rr };
+  return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(post.x)} ${S(post.y)} L ${S(c.x)} ${S(c.y)}`;
+}
+
+function mergePath(p, c, blocker = null) {
+  const h = isH();
+  const timeDelta = h ? c.x - p.x : c.y - p.y;
+  const laneDelta = h ? c.y - p.y : c.x - p.x;
+  const ts = Math.sign(timeDelta) || 1;
+  // blocker：同一车道上挡在父子之间的最近节点。此时提前拐弯，避免斜线贴着
+  // 那个节点，让人误以为边是从它连出来的。
+  const natural = Math.max(22, Math.min(Math.abs(timeDelta) * 0.5, Math.abs(laneDelta) * 0.9));
+  const run = blocker == null
     ? natural
-    : Math.min(natural, Math.max(8, Math.abs(blockerX - px) * 0.22));
-  const r = Math.min(10, run * 0.55);
-  const ax = px + run;
-  const bx = cx - ax;
-  const len = Math.hypot(bx, dy) || 1;
-  const ex = ax + (bx / len) * r;
-  const ey = py + (dy / len) * r;
-  return `M ${S(px)} ${S(py)} L ${S(ax - r)} ${S(py)} Q ${S(ax)} ${S(py)} ${S(ex)} ${S(ey)} L ${S(cx)} ${S(cy)}`;
+    : Math.min(natural, Math.max(8, Math.abs(blocker - (h ? p.x : p.y)) * 0.22));
+  const rr = Math.min(10, run * 0.55);
+  const a = h ? { x: p.x + ts * run, y: p.y } : { x: p.x, y: p.y + ts * run };
+  const pre = h ? { x: a.x - ts * rr, y: a.y } : { x: a.x, y: a.y - ts * rr };
+  const dx = c.x - a.x, dy = c.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const e = { x: a.x + (dx / len) * rr, y: a.y + (dy / len) * rr };
+  return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(e.x)} ${S(e.y)} L ${S(c.x)} ${S(c.y)}`;
 }
 
 function layout(data, viewportW, viewportH) {
+  const h = isH();
   const commits = topoSort(data.commits);
   const byHash = new Map(commits.map((c) => [c.hash, c]));
   const inWin = new Set(commits.map((c) => c.hash));
@@ -101,17 +119,15 @@ function layout(data, viewportW, viewportH) {
   }
   const current = (data.refs.find((r) => r.current) || {}).name || '';
   const tipTime = (r) => (byHash.get(r.hash) ? byHash.get(r.hash).time : 0);
-  // 认领顺序只看拓扑：main/master 最先、dev/develop 其次，其余尖端越旧越先。
-  // 不能把「当前分支」放最前：feature 分支会顺着 first-parent 把它基于的 dev/main 历史整条吞掉。
   const claimRank = (n) => (n === 'main' || n === 'master' ? 0 : n === 'dev' || n === 'develop' ? 1 : 2);
   const locals = data.refs.filter((r) => r.kind === 'local')
     .sort((a, b) => claimRank(a.name) - claimRank(b.name) || tipTime(a) - tipTime(b) || a.name.localeCompare(b.name));
   const remotes = data.refs.filter((r) => r.kind === 'remote' && !/\/HEAD$/.test(r.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // —— 链：每条分支沿 first-parent 认领一段连续历史 ——
-  const chainOf = new Map();       // hash -> chain id
-  const chainById = new Map();     // id -> chain
+  // 链认领
+  const chainOf = new Map();
+  const chainById = new Map();
   const chains = [];
   const freshChain = (id, name, kind) => {
     if (!chainColors.has(id)) chainColors.set(id, colorAt(chainColors.size));
@@ -120,19 +136,17 @@ function layout(data, viewportW, viewportH) {
     return ch;
   };
   const claim = (tip, id, ch) => {
-    let h = tip; let guard = 0;
-    while (h && inWin.has(h) && !chainOf.has(h) && guard++ < 4000) {
-      chainOf.set(h, id);
-      if (ch) ch.commits.push(h);
-      h = byHash.get(h).parents[0];
+    let cur = tip, guard = 0;
+    while (cur && inWin.has(cur) && !chainOf.has(cur) && guard++ < 4000) {
+      chainOf.set(cur, id);
+      if (ch) ch.commits.push(cur);
+      cur = byHash.get(cur).parents[0];
     }
   };
   for (const head of locals) if (!chainOf.has(head.hash)) {
     const ch = freshChain('h:' + head.name, head.name, 'local');
     claim(head.hash, ch.id, ch);
   }
-  // 先认领「有本地对应」的远端（只标记、不占行）：它们代表已知分支的共同历史，
-  // 必须在纯远端分支之前认领，否则纯远端分支会顺着 first-parent 把这些提交吞进自己的链。
   const remoteHasLocal = (r) => locals.some((l) => l.name === r.name.replace(/^[^/]+\//, ''));
   const remotesLocal = remotes.filter(remoteHasLocal).sort((a, b) => tipTime(a) - tipTime(b));
   const remotesGhost = remotes.filter((r) => !remoteHasLocal(r)).sort((a, b) => tipTime(a) - tipTime(b));
@@ -140,7 +154,6 @@ function layout(data, viewportW, viewportH) {
     if (chainOf.has(head.hash)) continue;
     claim(head.hash, 'h:' + head.name, null);
   }
-  // 纯远端分支：按尖端从旧到新认领，父分支先占好自己的历史
   for (const head of remotesGhost) {
     if (chainOf.has(head.hash)) continue;
     const ch = freshChain('h:' + head.name, head.name, 'ghost');
@@ -160,25 +173,30 @@ function layout(data, viewportW, viewportH) {
       chainOf.set(c.hash, ch.id); ch.commits.push(c.hash);
     }
   }
-  const chainColorOf = (h) => { const ch = chainById.get(chainOf.get(h)); return ch ? ch.color : COLORS[0]; };
-  const chainKindOf = (h) => { const ch = chainById.get(chainOf.get(h)); return ch ? ch.kind : 'local'; };
+  const chainColorOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.color : COLORS[0]; };
+  const chainKindOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.kind : 'local'; };
 
-  // —— 横向时间轴 ——
+  // —— 时间轴 ——
   const n = commits.length;
-  const usable = Math.max(viewportW - MARGIN_X * 2 - TAIL, 80);
-  const spacing = n <= 1 ? 0 : clamp(usable / (n - 1), MIN_SPACING, MAX_SPACING);
-  const contentW = MARGIN_X * 2 + (n - 1) * spacing + TAIL;
-  const xShift = Math.max(0, viewportW - contentW);
-  const xOf = new Map(commits.map((c, i) => [c.hash, MARGIN_X + xShift + (n - 1 - i) * spacing]));
+  const timeAvail = h
+    ? Math.max(viewportW - MARGIN_TIME * 2 - TAIL_H, 80)
+    : Math.max(viewportH - TAIL_TOP - TAIL_BOTTOM, 80);
+  const spacing = n <= 1 ? 0 : clamp(timeAvail / (n - 1), TIME_MIN, TIME_MAX);
+  const timeLen = MARGIN_TIME * 2 + Math.max(0, n - 1) * spacing + (h ? TAIL_H : TAIL_TOP + TAIL_BOTTOM);
+  // 时间坐标：横版最新在右；竖版最新在上
+  const timeOf = new Map(commits.map((c, i) => [c.hash, h
+    ? MARGIN_TIME + (n - 1 - i) * spacing
+    : TAIL_TOP + i * spacing]));
+  const xShift = h ? Math.max(0, viewportW - timeLen) : 0;
+  if (h && xShift) for (const [k, v] of timeOf) timeOf.set(k, v + xShift);
 
   const chainFrom = (tipHash) => {
-    const arr = []; let h = tipHash; let guard = 0;
-    while (h && inWin.has(h) && guard++ < 4000) { arr.push(h); h = byHash.get(h).parents[0]; }
+    const arr = []; let cur = tipHash, guard = 0;
+    while (cur && inWin.has(cur) && guard++ < 4000) { arr.push(cur); cur = byHash.get(cur).parents[0]; }
     return arr;
   };
 
-  // 每条本地分支在自己那一行上实际占据的 x 范围，还要算上远端影子画在本行的分歧段，
-  // 否则影子线和别的分支的点/线会在同一行重叠（例如 release 影子的远端提交夹在 notifications 提交之间）。
+  // 每条本地分支在时间轴上实际占据的范围（含影子分歧段），用于装箱
   const shadowExtent = new Map();
   for (const head of locals) {
     const id = chainOf.get(head.hash);
@@ -187,280 +205,291 @@ function layout(data, viewportW, viewportH) {
     if (!up || !inWin.has(up.hash)) continue;
     const uChain = chainFrom(up.hash);
     const lSet = new Set(chainFrom(head.hash));
-    const behindIdx = uChain.findIndex((h) => lSet.has(h));
-    const seg = uChain.slice(0, behindIdx === -1 ? uChain.length : behindIdx + 1);
+    const bi = uChain.findIndex((x) => lSet.has(x));
+    const seg = uChain.slice(0, bi === -1 ? uChain.length : bi + 1);
     let lo = Infinity, hi = -Infinity;
-    for (const h of seg) { const x = xOf.get(h); if (x < lo) lo = x; if (x > hi) hi = x; }
+    for (const x of seg) { const t = timeOf.get(x); if (t < lo) lo = t; if (t > hi) hi = t; }
     if (lo > hi) continue;
     const prev = shadowExtent.get(id);
     shadowExtent.set(id, prev ? [Math.min(prev[0], lo), Math.max(prev[1], hi)] : [lo, hi]);
   }
 
-  // —— 车道装箱：x 区间（含标签/名字预留）不重叠的链共用一行 ——
-  const chainX = new Map();
+  // —— 车道装箱（沿时间轴不重叠的链共享一条车道）——
+  const padNewer = h ? PAD_NEWER_H : PAD_NEWER_V;
+  const padOlder = h ? PAD_OLDER_H : PAD_OLDER_V;
+  const chainT = new Map();
   for (const ch of chains) {
     if (!ch.commits.length) continue;
-    let minX = Infinity, maxX = -Infinity;
-    for (const h of ch.commits) { const x = xOf.get(h); if (x < minX) minX = x; if (x > maxX) maxX = x; }
+    let lo = Infinity, hi = -Infinity;
+    for (const x of ch.commits) { const t = timeOf.get(x); if (t < lo) lo = t; if (t > hi) hi = t; }
     const ext = shadowExtent.get(ch.id);
-    if (ext) { minX = Math.min(minX, ext[0]); maxX = Math.max(maxX, ext[1]); }
-    chainX.set(ch.id, { minX, maxX });
+    if (ext) { lo = Math.min(lo, ext[0]); hi = Math.max(hi, ext[1]); }
+    chainT.set(ch.id, { lo, hi });
   }
-  // 推荐排布：当前分支固定最上 → main/master → dev/develop → 其余按第一次出现时间从旧到新
-  // → 纯远端分支最后。前三类独占行，不与其它分支共享，位置稳定。
-  // 行位置保持稳定：main 永远第一、dev 永远第二，checkout 不改变行序；
-  // 当前分支只通过名字加粗区分。
   const rankOf = (ch) => {
     if (ch.name === 'main' || ch.name === 'master') return 0;
     if (ch.name === 'dev' || ch.name === 'develop') return 1;
     return ch.kind === 'ghost' ? 3 : 2;
   };
   const order = chains.filter((ch) => ch.commits.length)
-    .sort((a, b) => rankOf(a) - rankOf(b) || chainX.get(a.id).minX - chainX.get(b.id).minX);
-  const rowRanges = [];
-  const rowOfChain = new Map();
-  const exclusiveRows = new Set();
+    .sort((a, b) => rankOf(a) - rankOf(b) || chainT.get(a.id).lo - chainT.get(b.id).lo);
+  const laneRanges = [];
+  const laneOfChain = new Map();
+  const exclusiveLanes = new Set();
   for (const ch of order) {
-    const { minX, maxX } = chainX.get(ch.id);
-    const lo = minX - PAD_L, hi = maxX + PAD_R;
+    const { lo, hi } = chainT.get(ch.id);
+    const newer = h ? hi : lo;
+    const older = h ? lo : hi;
+    const loEdge = h ? older - padOlder : newer - padNewer;
+    const hiEdge = h ? newer + padNewer : older + padOlder;
     const exclusive = ['main', 'master', 'dev', 'develop'].includes(ch.name);
-    let row = 0;
+    let lane = 0;
     while (true) {
-      const overlap = rowRanges[row] && rowRanges[row].some(([a, b]) => lo < b && hi > a);
-      const blocked = !exclusive && exclusiveRows.has(row);
+      const overlap = laneRanges[lane] && laneRanges[lane].some(([a, b]) => loEdge < b && hiEdge > a);
+      const blocked = !exclusive && exclusiveLanes.has(lane);
       if (!overlap && !blocked) break;
-      row++;
+      lane++;
     }
-    (rowRanges[row] ||= []).push([lo, hi]);
-    if (exclusive) exclusiveRows.add(row);
-    rowOfChain.set(ch.id, row);
+    (laneRanges[lane] ||= []).push([loEdge, hiEdge]);
+    if (exclusive) exclusiveLanes.add(lane);
+    laneOfChain.set(ch.id, lane);
   }
-  const rows = rowRanges.length;
+  const lanes = laneRanges.length;
 
-  // —— 纵向：行数少时撑开，行数多时压缩，不留滚动条 ——
-  const availH = Math.max(viewportH - MARGIN_Y * 2, 24);
-  const rowH = rows > 1 ? Math.max(ROW_MIN, Math.min(ROW_MAX, availH / (rows - 1))) : 0;
-  const contentH = (rows - 1) * rowH;
-  const offsetY = MARGIN_Y + Math.max(0, (availH - contentH) / 2);
-  const rowY = (i) => offsetY + i * rowH;
-  const svgH = Math.max(viewportH, offsetY + contentH + MARGIN_Y);
-
-  const rowOf = new Map();
+  // —— 车道轴位置 ——
+  const laneAvail = h ? Math.max(viewportH - MARGIN_LANE * 2, 24) : Math.max(viewportW - MARGIN_LANE * 2, 24);
+  const laneSize = lanes > 1
+    ? clamp(laneAvail / (lanes - 1), h ? ROW_MIN : COL_MIN, h ? ROW_MAX : COL_MAX)
+    : 0;
+  const laneLen = Math.max(0, lanes - 1) * laneSize;
+  const laneOffset = MARGIN_LANE + Math.max(0, (laneAvail - laneLen) / 2);
+  const lanePos = (i) => laneOffset + i * laneSize;
+  const laneOf = new Map();
   for (const ch of chains) {
-    const r = rowOfChain.get(ch.id);
-    if (r === undefined) continue;
-    for (const h of ch.commits) rowOf.set(h, r);
+    const lane = laneOfChain.get(ch.id);
+    if (lane === undefined) continue;
+    for (const x of ch.commits) laneOf.set(x, lane);
   }
 
-  // 每一行上的节点 x，用于汇入边避让同排节点
-  const xsByRow = new Map();
+  // 每一车道上的节点时间，用于汇入边避让同车道节点
+  const tsByLane = new Map();
   for (const c of commits) {
-    const r = rowOf.get(c.hash);
-    if (r === undefined || chainKindOf(c.hash) === 'ghost') continue;
-    if (!xsByRow.has(r)) xsByRow.set(r, []);
-    xsByRow.get(r).push(xOf.get(c.hash));
+    const lane = laneOf.get(c.hash);
+    if (lane === undefined || chainKindOf(c.hash) === 'ghost') continue;
+    const arr = tsByLane.get(lane) || []; arr.push(timeOf.get(c.hash)); tsByLane.set(lane, arr);
   }
-  for (const arr of xsByRow.values()) arr.sort((a, b) => a - b);
-  const blockerOnRow = (row, px, cx) => {
-    const xs = xsByRow.get(row) || [];
-    if (cx > px) return xs.find((x) => x > px + 5 && x < cx - 5) ?? null;
-    if (cx < px) return [...xs].reverse().find((x) => x < px - 5 && x > cx + 5) ?? null;
+  for (const arr of tsByLane.values()) arr.sort((a, b) => a - b);
+  const blockerOnLane = (lane, pt, ct) => {
+    const arr = tsByLane.get(lane) || [];
+    if (ct > pt) return arr.find((t) => t > pt + 5 && t < ct - 5) ?? null;
+    if (ct < pt) return [...arr].reverse().find((t) => t < pt - 5 && t > ct + 5) ?? null;
     return null;
   };
 
-  // —— 边：同车道横线；分叉=垂直+圆角；汇入=圆角出发+直线斜线 ——
+  // —— 坐标映射 ——
+  const svgW = h ? Math.max(viewportW, timeLen) : Math.max(viewportW, MARGIN_LANE * 2 + laneLen);
+  const svgH = h ? Math.max(viewportH, MARGIN_LANE * 2 + laneLen) : Math.max(viewportH, timeLen);
+  const pt = (hash, fallbackLane) => {
+    const t = timeOf.get(hash) ?? 0;
+    const lane = laneOf.has(hash) ? laneOf.get(hash) : fallbackLane;
+    const l = lanePos(lane);
+    return h ? { x: t, y: l } : { x: l, y: t };
+  };
+
+  // —— 边 ——
   const edges = [];
   for (const c of commits) {
-    const cr = rowOf.get(c.hash);
-    if (cr === undefined || chainKindOf(c.hash) === 'ghost') continue;
-    const cColor = chainColorOf(c.hash);
-    const cx = xOf.get(c.hash); const cy = rowY(cr);
-    const cChain = chainOf.get(c.hash);
+    const lane = laneOf.get(c.hash);
+    if (lane === undefined || chainKindOf(c.hash) === 'ghost') continue;
+    const chainId = chainOf.get(c.hash);
+    const color = chainColorOf(c.hash);
+    const cp = pt(c.hash);
     c.parents.forEach((p, idx) => {
       if (!inWin.has(p)) {
-        if (idx === 0) edges.push({ kind: 'stub', from: c.hash, chain: cChain, cx, x1: cx - 18, y1: cy, x2: cx - 5, y2: cy, color: cColor });
+        if (idx === 0) {
+          const older = h ? { x: cp.x - 18, y: cp.y } : { x: cp.x, y: cp.y + 18 };
+          const near = h ? { x: cp.x - 5, y: cp.y } : { x: cp.x, y: cp.y + 5 };
+          edges.push({ kind: 'stub', from: c.hash, chain: chainId, cx: timeOf.get(c.hash), x1: older.x, y1: older.y, x2: near.x, y2: near.y, color });
+        }
         return;
       }
-      const pr = rowOf.get(p);
-      if (pr === undefined || chainKindOf(p) === 'ghost') return;
-      const px = xOf.get(p); const py = rowY(pr);
+      const pLane = laneOf.get(p);
+      if (pLane === undefined || chainKindOf(p) === 'ghost') return;
+      const pp = pt(p);
       const pChain = chainOf.get(p);
-      const color = idx === 0 ? cColor : chainColorOf(p);
-      if (pr === cr) { edges.push({ kind: 'line', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, x1: px, y1: py, x2: cx, y2: cy, color }); return; }
+      if (pLane === lane) {
+        edges.push({ kind: 'line', from: c.hash, chain: chainId, pChain, cx: timeOf.get(c.hash), pX: pp.x, pY: pp.y, x1: pp.x, y1: pp.y, x2: cp.x, y2: cp.y, color: idx === 0 ? color : chainColorOf(p) });
+        return;
+      }
       if (idx === 0) {
-        const dirY = Math.sign(cy - py) || 1;
-        const rr = Math.min(CORNER, Math.abs(cy - py) * 0.45, Math.abs(cx - px) * 0.45);
-        const d = `M ${S(px)} ${S(py)} L ${S(px)} ${S(cy - dirY * rr)} Q ${S(px)} ${S(cy)} ${S(px + rr)} ${S(cy)} L ${S(cx)} ${S(cy)}`;
-        edges.push({ kind: 'path', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, d, color });
+        edges.push({ kind: 'path', from: c.hash, chain: chainId, pChain, cx: timeOf.get(c.hash), pX: pp.x, pY: pp.y, d: branchPath(pp, cp), color });
       } else {
-        // 汇入线从 parent 行出发；若同一行紧挨着另一个提交，提前拐弯，
-        // 避免斜线贴着那个提交，看起来像边是从它连出来的。
-        const blockerX = blockerOnRow(pr, px, cx);
-        edges.push({ kind: 'path', from: c.hash, chain: cChain, pChain, cx, pX: px, pY: py, d: mergePath(px, py, cx, cy, blockerX), color });
+        // 汇入线从父提交所在车道出发；若同车道紧挨着另一个提交，提前拐弯，避免斜线贴着它
+        const blocker = blockerOnLane(pLane, timeOf.get(p), timeOf.get(c.hash));
+        edges.push({ kind: 'path', from: c.hash, chain: chainId, pChain, cx: timeOf.get(c.hash), pX: pp.x, pY: pp.y, d: mergePath(pp, cp, blocker), color: chainColorOf(p) });
       }
     });
   }
 
-  // 远端可达的提交（用于远端模式复用同一套边几何）
+  // 远端可达 + 远端独有合并边
   const remoteReach = new Set();
   const stack = [];
   for (const r of remotes) if (inWin.has(r.hash)) { remoteReach.add(r.hash); stack.push(r.hash); }
   while (stack.length) {
-    const h = stack.pop();
-    for (const p of byHash.get(h).parents) if (inWin.has(p) && !remoteReach.has(p)) { remoteReach.add(p); stack.push(p); }
+    const cur = stack.pop();
+    for (const p of byHash.get(cur).parents) if (inWin.has(p) && !remoteReach.has(p)) { remoteReach.add(p); stack.push(p); }
   }
   const remoteExtraEdges = [];
-  const remoteBranchStarts = []; // 纯远端分支的起点连接线
+  const remoteBranchStarts = [];
 
-  // —— 本地节点 ——
+  // —— 节点 ——
   const nodes = commits
-    .filter((c) => rowOf.has(c.hash) && chainKindOf(c.hash) !== 'ghost')
-    .map((c) => ({
-      hash: c.hash, x: xOf.get(c.hash), y: rowY(rowOf.get(c.hash)),
-      color: chainColorOf(c.hash), chain: chainOf.get(c.hash),
-      subject: c.subject, time: c.time,
-      head: c.hash === (data.refs.find((r) => r.current) || {}).hash,
-      isNew: !seen.has(c.hash),
-    }));
+    .filter((c) => laneOf.has(c.hash) && chainKindOf(c.hash) !== 'ghost')
+    .map((c) => {
+      const p = pt(c.hash);
+      return {
+        hash: c.hash, x: p.x, y: p.y, t: timeOf.get(c.hash),
+        color: chainColorOf(c.hash), chain: chainOf.get(c.hash),
+        subject: c.subject, time: c.time,
+        head: c.hash === (data.refs.find((r) => r.current) || {}).hash,
+        isNew: !seen.has(c.hash),
+      };
+    });
   for (const nd of nodes) seen.add(nd.hash);
 
   // —— 远端链 / 圆环 ——
   const ringMap = new Map();
-  const addRing = (h, fallbackRow, fallbackColor, local, owner) => {
-    if (ringMap.has(h)) return;
-    const r = rowOf.get(h);
-    const isNew = !seen.has(h);
-    ringMap.set(h, {
-      hash: h,
-      x: xOf.get(h),
-      y: rowY(r !== undefined ? r : fallbackRow),
-      color: r !== undefined ? chainColorOf(h) : fallbackColor,
-      local: local && r !== undefined && chainKindOf(h) !== 'ghost',
-      chain: owner,
-      isNew,
+  const addRing = (hash, fallbackLane, fallbackColor, local, owner) => {
+    if (ringMap.has(hash)) return;
+    const lane = laneOf.has(hash) ? laneOf.get(hash) : fallbackLane;
+    const p = pt(hash, lane);
+    const isNew = !seen.has(hash);
+    ringMap.set(hash, {
+      hash, x: p.x, y: p.y, t: timeOf.get(hash),
+      color: laneOf.has(hash) ? chainColorOf(hash) : fallbackColor,
+      local: local && laneOf.has(hash) && chainKindOf(hash) !== 'ghost',
+      chain: owner, isNew,
     });
-    seen.add(h);
+    seen.add(hash);
   };
 
   const stats = [];
   const remoteChains = [];
   for (const head of locals) {
     const up = data.refs.find((r) => r.kind === 'remote' && r.name === head.upstream);
-    const headRow = rowOf.get(head.hash);
+    const headLane = laneOf.get(head.hash);
     const base = { head, upstream: up ? up.name : '', ahead: null, behind: null, hasUpstream: !!up, inWindow: false };
-    if (!up || headRow === undefined || !inWin.has(up.hash)) { stats.push(base); continue; }
+    if (!up || headLane === undefined || !inWin.has(up.hash)) { stats.push(base); continue; }
     const uChain = chainFrom(up.hash);
     const lChain = chainFrom(head.hash);
     const uSet = new Set(uChain); const lSet = new Set(lChain);
-    const aheadIdx = lChain.findIndex((h) => uSet.has(h));
-    const behindIdx = uChain.findIndex((h) => lSet.has(h));
+    const aheadIdx = lChain.findIndex((x) => uSet.has(x));
+    const behindIdx = uChain.findIndex((x) => lSet.has(x));
     const ahead = aheadIdx === -1 ? lChain.length : aheadIdx;
     const behind = behindIdx === -1 ? uChain.length : behindIdx;
-    stats.push({ ...base, ahead, behind, inWindow: true, upX: xOf.get(up.hash) });
-    // 分歧区最左端 = 最老的「只属于某一方」的提交；merge-base 是共有的，留在框外
+    const upT = timeOf.get(up.hash);
+    stats.push({ ...base, ahead, behind, inWindow: true, upT });
     const remoteOnly = uChain.slice(0, behind === -1 ? uChain.length : behind);
     const localOnly = lChain.slice(0, ahead);
-    let divX = null;
-    for (const h of remoteOnly) { const x = xOf.get(h); if (divX === null || x < divX) divX = x; }
-    for (const h of localOnly) { const x = xOf.get(h); if (divX === null || x < divX) divX = x; }
-    for (const h of uChain) addRing(h, headRow, chainColorOf(head.hash), true, chainOf.get(head.hash));
+    let divOlder = null;
+    for (const x of [...remoteOnly, ...localOnly]) {
+      const t = timeOf.get(x);
+      if (divOlder === null) divOlder = t;
+      else divOlder = h ? Math.min(divOlder, t) : Math.max(divOlder, t);
+    }
+    const localT = timeOf.get(head.hash);
+    const newerT = h ? Math.max(upT, localT) : Math.min(upT, localT);
+    for (const x of uChain) addRing(x, headLane, chainColorOf(head.hash), true, chainOf.get(head.hash));
     const only = new Set(behind === -1 ? uChain : uChain.slice(0, behind));
     const seg = uChain.slice(0, behind === -1 ? uChain.length : behind + 1);
-    // 远端独有提交若是合并提交，补上它的合并边；共享提交的合并边由下面的本地边筛选覆盖
-    for (const h of uChain) {
-      if (rowOf.has(h)) continue;
-      const c = byHash.get(h);
-      const cy = rowY(headRow);
+    for (const x of uChain) {
+      if (laneOf.has(x)) continue;
+      const c = byHash.get(x);
+      const cp = pt(x, headLane);
       c.parents.forEach((p, idx) => {
-        if (idx === 0 || !inWin.has(p)) return;
-        const pr = rowOf.get(p);
-        if (pr === undefined) return;
-        const px = xOf.get(p), rx = xOf.get(h);
-        remoteExtraEdges.push({ kind: 'path', chain: chainOf.get(head.hash), d: mergePath(px, rowY(pr), rx, cy, blockerOnRow(pr, px, rx)), color: chainColorOf(p) });
+        if (idx === 0 || !inWin.has(p) || !laneOf.has(p)) return;
+        const pLane = laneOf.get(p);
+        const blocker = blockerOnLane(pLane, timeOf.get(p), timeOf.get(x));
+        remoteExtraEdges.push({ kind: 'path', chain: chainOf.get(head.hash), d: mergePath(pt(p, headLane), cp, blocker), color: chainColorOf(p) });
       });
     }
-    // 只画远端独有段 + 第一个共享提交（衔接进共享图）；共享部分由本地边复用
-    const firstShared = uChain.findIndex((h) => rowOf.has(h));
+    const firstShared = uChain.findIndex((x) => laneOf.has(x));
     const prefix = firstShared === -1 ? uChain : uChain.slice(0, firstShared + 1);
     remoteChains.push({
-      kind: 'shadow', row: headRow, color: chainColorOf(head.hash), chain: chainOf.get(head.hash),
-      points: seg.map((h) => ({ x: xOf.get(h), y: rowY(rowOf.get(h) ?? headRow) })),
-      fullPoints: prefix.map((h) => ({ x: xOf.get(h), y: rowY(rowOf.get(h) ?? headRow) })),
-      hits: seg.filter((h) => only.has(h)).map((h) => ({ hash: h, x: xOf.get(h), y: rowY(rowOf.get(h) ?? headRow), subject: byHash.get(h).subject, time: byHash.get(h).time })),
-      ahead, behind, divX,
-      mbX: behind === -1 ? null : xOf.get(uChain[behind]),
-      tx: xOf.get(up.hash), lx: xOf.get(head.hash),
-      y: rowY(headRow),
+      kind: 'shadow', lane: headLane, color: chainColorOf(head.hash), chain: chainOf.get(head.hash),
+      points: seg.map((x) => pt(x, headLane)),
+      fullPoints: prefix.map((x) => pt(x, headLane)),
+      hits: seg.filter((x) => only.has(x)).map((x) => ({ hash: x, ...pt(x, headLane), subject: byHash.get(x).subject, time: byHash.get(x).time })),
+      ahead, behind, divOlder, newerT,
+      txT: upT, lxT: localT, tipT: upT,
     });
   }
   const ghostChains = [];
   for (const ch of chains) {
     if (ch.kind !== 'ghost' || !ch.commits.length) continue;
-    const r = rowOfChain.get(ch.id);
-    if (r === undefined) continue;
+    const lane = laneOfChain.get(ch.id);
+    if (lane === undefined) continue;
     let tipHash = ch.commits[0], oldestHash = ch.commits[0];
-    for (const h of ch.commits) {
-      if (xOf.get(h) > xOf.get(tipHash)) tipHash = h;
-      if (xOf.get(h) < xOf.get(oldestHash)) oldestHash = h;
+    for (const x of ch.commits) {
+      if (timeOf.get(x) > timeOf.get(tipHash)) tipHash = x;
+      if (timeOf.get(x) < timeOf.get(oldestHash)) oldestHash = x;
     }
-    // 起点连接：父提交可能没有车道（远端独有），就用它圆环的可视位置作为起点
     const parent = byHash.get(oldestHash).parents[0];
     if (parent && inWin.has(parent)) {
-      const pr = rowOf.get(parent);
+      const pLane = laneOf.has(parent) ? laneOf.get(parent) : lane;
       const ring = ringMap.get(parent);
-      const py = pr !== undefined ? rowY(pr) : (ring ? ring.y : undefined);
-      if (py !== undefined) {
-        const px = xOf.get(parent), cx = xOf.get(oldestHash), cy = rowY(r);
-        const dirY = Math.sign(cy - py) || 1;
-        const rr = Math.min(CORNER, Math.abs(cy - py) * 0.45, Math.abs(cx - px) * 0.45);
-        remoteBranchStarts.push({
-          color: ch.color, chain: ch.id,
-          d: `M ${S(px)} ${S(py)} L ${S(px)} ${S(cy - dirY * rr)} Q ${S(px)} ${S(cy)} ${S(px + rr)} ${S(cy)} L ${S(cx)} ${S(cy)}`,
-        });
-      }
+      const pp = ring ? { x: ring.x, y: ring.y } : pt(parent, pLane);
+      remoteBranchStarts.push({ chain: ch.id, color: ch.color, d: branchPath(pp, pt(oldestHash, lane)) });
     }
-    for (const h of ch.commits) addRing(h, r, ch.color, false, ch.id);
-    // 纯远端分支自己的合并边
-    for (const h of ch.commits) {
-      const c = byHash.get(h);
-      const cy = rowY(r);
+    for (const x of ch.commits) addRing(x, lane, ch.color, false, ch.id);
+    for (const x of ch.commits) {
+      const c = byHash.get(x);
+      const cp = pt(x, lane);
       c.parents.forEach((p, idx) => {
-        if (idx === 0 || !inWin.has(p)) return;
-        const pr = rowOf.get(p);
-        if (pr === undefined) return;
-        remoteExtraEdges.push({ kind: 'path', chain: ch.id, d: mergePath(xOf.get(p), rowY(pr), xOf.get(h), cy), color: chainColorOf(p) });
+        if (idx === 0 || !inWin.has(p) || !laneOf.has(p)) return;
+        const pLane = laneOf.get(p);
+        const blocker = blockerOnLane(pLane, timeOf.get(p), timeOf.get(x));
+        remoteExtraEdges.push({ kind: 'path', chain: ch.id, d: mergePath(pt(p, lane), cp, blocker), color: chainColorOf(p) });
       });
     }
-    const pts = ch.commits.map((h) => ({ x: xOf.get(h), y: rowY(r) }));
-    ghostChains.push({ name: ch.name, color: ch.color, chain: ch.id, tipX: xOf.get(tipHash), y: rowY(r) });
+    const pts = ch.commits.map((x) => pt(x, lane));
+    const tipP = pt(tipHash, lane);
+    ghostChains.push({ name: ch.name, color: ch.color, chain: ch.id, tipX: tipP.x, tipY: tipP.y, tipT: timeOf.get(tipHash) });
     remoteChains.push({
-      kind: 'ghostLane', row: r, color: ch.color, chain: ch.id,
+      kind: 'ghostLane', lane, color: ch.color, chain: ch.id,
       points: pts, fullPoints: pts,
-      hits: ch.commits.map((h) => ({ hash: h, x: xOf.get(h), y: rowY(r), subject: byHash.get(h).subject, time: byHash.get(h).time })),
-      ahead: 0, behind: 0, mbX: null, divX: Math.min(...pts.map((p) => p.x)),
-      tx: xOf.get(tipHash), lx: xOf.get(tipHash), y: rowY(r),
+      hits: ch.commits.map((x) => ({ hash: x, ...pt(x, lane), subject: byHash.get(x).subject, time: byHash.get(x).time })),
+      ahead: 0, behind: 0, divOlder: h ? Math.min(...pts.map((p) => p.x)) : Math.max(...pts.map((p) => p.y)),
+      newerT: h ? Math.max(...pts.map((p) => p.x)) : Math.min(...pts.map((p) => p.y)),
+      txT: timeOf.get(tipHash), lxT: timeOf.get(tipHash), tipT: timeOf.get(tipHash),
     });
   }
 
-  // —— 玻璃带：分歧区，两端半圆端帽的圆心与两端提交重合 ——
-  // 这样空心大圆到带子的上 / 下 / 右边缘距离一致，看起来是同一个圆心的同心关系
-  const panelH = clamp(rowH * 0.78, 20, 34) || 26;
+  // —— 玻璃带 ——
+  const thickness = clamp(laneSize * 0.78, 20, 34) || 26;
   const panels = [];
   for (const ch of remoteChains) {
     if (ch.kind === 'shadow' && ch.ahead === 0 && ch.behind === 0) continue;
-    const xs = ch.points.map((p) => p.x);
-    const leftX = ch.divX !== null ? ch.divX : (ch.mbX === null ? Math.min(...xs) : ch.mbX);
-    const rightX = Math.max(ch.tx, ch.lx);
-    const x1 = leftX - panelH / 2;
-    const x2 = rightX + panelH / 2;
-    const y = clamp(ch.y - panelH / 2, 2, svgH - panelH - 2);
-    panels.push({ x1, x2, y, h: panelH, chain: ch.chain });
+    const older = ch.divOlder ?? (h ? Math.min(ch.newerT, ch.tipT) : Math.max(ch.newerT, ch.tipT));
+    const newer = ch.newerT;
+    const lane = lanePos(ch.lane);
+    if (h) {
+      const x1 = older - thickness / 2;
+      const x2 = newer + thickness / 2;
+      panels.push({ x: x1, y: lane - thickness / 2, w: Math.max(0, x2 - x1), h: thickness, chain: ch.chain });
+    } else {
+      const y1 = newer - thickness / 2;
+      const y2 = older + thickness / 2;
+      panels.push({ x: lane - thickness / 2, y: y1, w: thickness, h: Math.max(0, y2 - y1), chain: ch.chain });
+    }
   }
 
-  return { commits, byHash, xOf, rowOf, rowY, rowH, rows, svgH, contentW,
+  return {
+    commits, timeOf, laneOf, lanePos, laneSize, svgW, svgH, contentW: timeLen, contentH: timeLen,
     edges, nodes, stats, remoteChains, remoteExtraEdges, remoteBranchStarts, remoteReach,
     remoteRings: [...ringMap.values()], panels, chainOf, chainById,
-    locals, current, ghostChains, chainColorOf, rowOfChain };
+    locals, current, ghostChains, chainColorOf, laneOfChain, pt,
+  };
 }
 
 // —— SVG 片段 ——
@@ -482,13 +511,13 @@ const chainLineEl = (points, color, chain) => points.length > 1
 
 const ringEl = (r) => {
   const d = dim(r.chain);
-  // 环内的小点属于本地层，不再画在这里：本地模式由清晰点层提供，远端模式由模糊点层提供
   return `<circle class="remote-ring${d}${r.isNew ? ' new' : ''}" cx="${S(r.x)}" cy="${S(r.y)}" r="8" style="stroke:${r.color}"/>`;
 };
 
 // —— 渲染 ——
 let lastData = null;
 let lastLayout = null;
+let knownChains = new Set();
 
 function render(data) {
   lastData = data;
@@ -502,7 +531,6 @@ function render(data) {
   $('#repo').title = `${data.repo.replace(/\\/g, '/')}\n点击切换仓库`;
   $('#repo').classList.remove('needs-repo');
 
-  // 工作区状态：已暂存 / 未暂存 / 未跟踪
   const wt = data.status || { staged: 0, unstaged: 0, untracked: 0 };
   const wtEl = $('#wt');
   const wtParts = [];
@@ -513,9 +541,8 @@ function render(data) {
     wtEl.innerHTML = wtParts.join('');
     wtEl.title = `已暂存 ${wt.staged} · 未暂存 ${wt.unstaged} · 未跟踪 ${wt.untracked}`;
     wtEl.hidden = false;
-  } else {
-    wtEl.hidden = true;
-  }
+  } else wtEl.hidden = true;
+
   if (!L.commits.length) {
     $('#empty').hidden = false;
     $('#empty').innerHTML = '<div class="empty-title">这个仓库还没有提交</div><div class="empty-hint">提交之后分支雷达会自动出现</div>';
@@ -524,114 +551,107 @@ function render(data) {
   }
   $('#empty').hidden = true; $('#graph').hidden = false;
 
-  // 首次渲染不播动画、不提示；之后只对真正新出现的提交播 1s 点亮
   if (firstLoad) {
-    for (const n of L.nodes) n.isNew = false;
+    for (const nd of L.nodes) nd.isNew = false;
     for (const r of L.remoteRings) r.isNew = false;
     firstLoad = false;
   }
   knownChains = new Set(L.chainOf.values());
-  const newCount = L.nodes.filter((n) => n.isNew).length + L.remoteRings.filter((r) => r.isNew).length;
+  const newCount = L.nodes.filter((nd) => nd.isNew).length + L.remoteRings.filter((r) => r.isNew).length;
   if (newCount > 0) showNotice(`${newCount} 个新提交`);
 
-  // 标签：hash -> 标签名数组；在对应提交下方画小菱形
   const tagByHash = new Map();
   for (const t of (data.tags || [])) {
-    const arr = tagByHash.get(t.hash) || [];
-    arr.push(t.name);
-    tagByHash.set(t.hash, arr);
+    const arr = tagByHash.get(t.hash) || []; arr.push(t.name); tagByHash.set(t.hash, arr);
   }
 
-  const svgW = Math.max(W, L.contentW);
   const svg = $('#canvas');
-  svg.setAttribute('viewBox', `0 0 ${svgW} ${L.svgH}`);
-  svg.style.width = `${svgW}px`;
+  svg.setAttribute('viewBox', `0 0 ${L.svgW} ${L.svgH}`);
+  svg.style.width = `${L.svgW}px`;
   svg.style.height = `${L.svgH}px`;
 
-  updateTimeline(L, W, svgW, data.tags || []);
-  const curRef = data.refs.find((r) => r.current);
-  if (curRef) $('#tl-view').style.setProperty('--dot', L.chainColorOf(curRef.hash));
-
-  // 环内镂空：把每条线在圆环内部挖掉（环本身不填色）
   const holes = L.remoteRings.map((r) => `<circle cx="${S(r.x)}" cy="${S(r.y)}" r="7.1" fill="black"/>`).join('');
-  $('#defs').innerHTML = `<mask id="ringHoles" maskUnits="userSpaceOnUse" x="0" y="0" width="${svgW}" height="${L.svgH}">`
-    + `<rect x="0" y="0" width="${svgW}" height="${L.svgH}" fill="white"/>${holes}</mask>`;
+  $('#defs').innerHTML = `<mask id="ringHoles" maskUnits="userSpaceOnUse" x="0" y="0" width="${L.svgW}" height="${L.svgH}">`
+    + `<rect x="0" y="0" width="${L.svgW}" height="${L.svgH}" fill="white"/>${holes}</mask>`;
   for (const id of ['backRemote', 'backLocal', 'frontRemote', 'frontEdges']) {
     document.getElementById(id).setAttribute('mask', 'url(#ringHoles)');
   }
 
-  // 本地边与点分两层：环要盖住线，但本地小点要盖在环上
   const edgeHtml = L.edges.map(edgeEl).join('');
   const nodeHtml = L.nodes.map(nodeEl).join('');
-  const dotHtml = nodeHtml;
 
   const branchStartHtml = L.remoteBranchStarts.map((p) => `<path class="edge${dim(p.chain)}" d="${p.d}" style="stroke:${p.color}"/>`);
   const remoteBackParts = L.remoteChains.map((ch) => chainLineEl(ch.points, ch.color, ch.chain));
   remoteBackParts.push(...branchStartHtml);
-  // 远端模式：远端独有段 + 远端可达的本地边（同一套圆角合并几何）+ 远端独有合并边 + 起点连接线
   const remoteFrontParts = L.remoteChains.map((ch) => chainLineEl(ch.fullPoints, ch.color, ch.chain));
-  remoteFrontParts.push(...L.edges.filter((e) => L.remoteReach.has(e.from)).map(edgeEl));
+  remoteFrontParts.push(...L.edges.filter((e) => e.from && L.remoteReach.has(e.from)).map(edgeEl));
   remoteFrontParts.push(...L.remoteExtraEdges.map(edgeEl));
   remoteFrontParts.push(...branchStartHtml);
   const ringsHtml = L.remoteRings.map(ringEl).join('');
 
   const panelHtml = L.panels.map((p) =>
-    `<rect class="glass${dim(p.chain)}" x="${S(p.x1)}" y="${S(p.y)}" width="${S(Math.max(0, p.x2 - p.x1))}" height="${p.h}" rx="${p.h / 2}"/>`).join('');
+    `<rect class="glass${dim(p.chain)}" x="${S(p.x)}" y="${S(p.y)}" width="${S(Math.max(0, p.w))}" height="${S(Math.max(0, p.h))}" rx="${S(Math.min(p.w, p.h) / 2)}"/>`).join('');
 
   $('#backLocal').innerHTML = edgeHtml;
   $('#backDots').innerHTML = nodeHtml;
   $('#backRemote').innerHTML = remoteBackParts.join('');
   $('#frontRemote').innerHTML = remoteFrontParts.join('');
   $('#frontEdges').innerHTML = edgeHtml;
-  $('#frontDots').innerHTML = dotHtml;
+  $('#frontDots').innerHTML = nodeHtml;
   $('#rings').innerHTML = ringsHtml;
   $('#panels').innerHTML = panelHtml;
 
-  // 名字
+  // 名字：横版在尖端右侧；竖版旋转在尖端上方
   const chips = [];
   const drawn = new Set();
+  const chipText = (x, y, text, color, chainId, extraCls = '', extraTspans = '') => {
+    const cls = `chip${extraCls}${dim(chainId)}`;
+    if (isH()) return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${text}${extraTspans}</text>`;
+    return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 6)}" y="${S(y - 12)}" transform="rotate(-90 ${S(x + 6)} ${S(y - 12)})" text-anchor="start" style="fill:${color}">${text}${extraTspans}</text>`;
+  };
   for (const head of L.locals) {
-    const row = L.rowOf.get(head.hash);
-    const lx0 = L.xOf.get(head.hash);
-    // 同一位置（同一提交）上的多个分支只画一条名字，其余列在别名里
-    if (row === undefined || drawn.has(row + ':' + lx0)) continue;
-    drawn.add(row + ':' + lx0);
+    const lane = L.laneOf.get(head.hash);
+    const t = L.timeOf.get(head.hash);
+    if (lane === undefined || drawn.has(lane + ':' + t)) continue;
+    drawn.add(lane + ':' + t);
     const st = L.stats.find((s) => s.head.name === head.name);
     const isCur = head.name === L.current;
-    const cur = isCur ? ' current' : '';
-    const lx = L.xOf.get(head.hash); const ly = L.rowY(row);
-    const aliases = L.locals.filter((l) => L.rowOf.get(l.hash) === row && L.xOf.get(l.hash) === lx && l.name !== head.name).map((l) => l.name);
+    const p = L.pt(head.hash);
+    const aliases = L.locals.filter((l) => L.laneOf.get(l.hash) === lane && L.timeOf.get(l.hash) === t && l.name !== head.name).map((l) => l.name);
     const aliasTxt = aliases.length ? `<tspan class="chip-count" dx="7">· ${esc(aliases.join(' · '))}</tspan>` : '';
     const color = L.chainColorOf(head.hash);
     const chainId = L.chainOf.get(head.hash);
-    // 当前分支：名字后面加一个小菱形标记（加粗在深色描边下太不明显）
     const curMark = isCur ? '<tspan class="chip-head" dx="10" dy="3">◆</tspan>' : '';
-    // 分叉时远端尖端可能在本地尖端右侧，名字要放到两者之后，别盖住远端提交
-    const labelX = Math.max(lx, st && st.inWindow && st.upX != null ? st.upX : lx);
-    chips.push(`<text class="chip chip-local${cur}${dim(chainId)}" data-chain="${esc(chainId)}" x="${S(labelX + 16)}" y="${S(ly + 6.5)}" style="fill:${color}">${esc(head.name)}${aliasTxt}${curMark}</text>`);
-    // 远端视角只显示真正的 upstream 名；没有 upstream 的本地分支在远端不存在，不显示
+    // 分叉时远端尖端可能更靠“新”一侧，名字放到两者之后，避免盖住远端提交
+    const labelT = st && st.inWindow && st.upT != null
+      ? (isH() ? Math.max(t, st.upT) : Math.min(t, st.upT))
+      : t;
+    const lp = isH() ? { x: labelT, y: p.y } : { x: p.x, y: labelT };
+    chips.push(chipText(lp.x, lp.y, `${esc(head.name)}${aliasTxt}`, color, chainId, isCur ? ' current' : '', curMark));
     if (st && st.upstream) {
-      const rx = st.inWindow && st.upX != null ? st.upX : lx;
-      chips.push(`<text class="chip chip-remote${dim(chainId)}" data-chain="${esc(chainId)}" x="${S(rx + 16)}" y="${S(ly + 6.5)}" style="fill:${color}">${esc(st.upstream)}</text>`);
+      const upPoint = isH() ? { x: st.upT, y: p.y } : { x: p.x, y: st.upT };
+      chips.push(chipText(upPoint.x, upPoint.y, esc(st.upstream), color, chainId, '', ''));
     }
   }
   for (const g of L.ghostChains) {
-    chips.push(`<text class="chip chip-ghost${dim(g.chain)}" data-chain="${esc(g.chain)}" x="${S(g.tipX + 16)}" y="${S(g.y + 6.5)}" style="fill:${g.color}">${esc(g.name)}</text>`);
+    chips.push(chipText(g.tipX, g.tipY, esc(g.name), g.color, g.chain, ' chip-ghost'));
   }
-  // tag 标记：三角 + 标签名；靠近右边缘时名字翻到左侧
+  // tag：三角 + 名称
   for (const [hash, names] of tagByHash) {
-    const row = L.rowOf.get(hash);
-    if (row === undefined) continue;
-    const x = L.xOf.get(hash), y = L.rowY(row);
+    if (!L.laneOf.has(hash)) continue;
+    const p = L.pt(hash);
     const label = names.join(', ');
-    const anchorEnd = svgW - x < label.length * 7 + 22;
-    const tx = anchorEnd ? x - 9 : x + 9;
-    const anchor = anchorEnd ? 'end' : 'start';
     const cls = dim(L.chainOf.get(hash));
-    chips.push(`<polygon class="tag-mark${cls}" points="${S(x - 4.5)},${S(y - 20)} ${S(x + 4.5)},${S(y - 20)} ${S(x)},${S(y - 13.5)}" style="fill:var(--ink)"/>`);
-    chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(y - 13)}" text-anchor="${anchor}">${esc(label)}</text>`);
+    chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 4.5)},${S(p.y - 20)} ${S(p.x + 4.5)},${S(p.y - 20)} ${S(p.x)},${S(p.y - 13.5)}" style="fill:var(--ink)"/>`);
+    if (isH()) {
+      const anchorEnd = L.svgW - p.x < label.length * 7 + 22;
+      const tx = anchorEnd ? p.x - 9 : p.x + 9;
+      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 13)}" text-anchor="${anchorEnd ? 'end' : 'start'}">${esc(label)}</text>`);
+    } else {
+      chips.push(`<text class="tag-name${cls}" x="${S(p.x + 16)}" y="${S(p.y - 24)}" transform="rotate(-90 ${S(p.x + 16)} ${S(p.y - 24)})">${esc(label)}</text>`);
+    }
   }
-  // 聚焦模式：列出汇入当前分支的每条分支「最后一条汇入线」，并在起点（侧分支尖端）标名字
+  // 聚焦：汇入分支的最后一条汇入线起点标名
   if (focusChain) {
     const latest = new Map();
     for (const e of L.edges) {
@@ -642,70 +662,92 @@ function render(data) {
     for (const [pid, e] of latest) {
       const ch = L.chainById.get(pid);
       if (!ch || !ch.name) continue;
-      chips.push(`<text class="chip merge-label" data-chain="${esc(pid)}" x="${S(e.pX + 10)}" y="${S(e.pY - 8)}" style="fill:${ch.color}">${esc(ch.name)}</text>`);
+      chips.push(chipText(e.pX, e.pY - 2, esc(ch.name), ch.color, pid, ' merge-label'));
     }
   }
   $('#chips').innerHTML = chips.join('');
 
-  // 命中区（带上 tag 名，悬停提示里显示）
   const tagsAt = (hash) => (tagByHash.get(hash) || []).join(', ');
   const hits = [];
   for (const nd of L.nodes) hits.push(hitEl(nd.x, nd.y, nd, '提交', nd.chain, tagsAt(nd.hash)));
   for (const ch of L.remoteChains) for (const d of ch.hits) hits.push(hitEl(d.x, d.y, d, '远端独有', ch.chain, tagsAt(d.hash)));
   $('#hits').innerHTML = hits.join('');
 
-  scrollToNewest(svgW, W);
+  updateTimeline(L, W, H);
+  const curRef = data.refs.find((r) => r.current);
+  if (curRef) $('#tl-view').style.setProperty('--dot', L.chainColorOf(curRef.hash));
+
+  scrollToNewest();
   updateTlView();
 }
 
-// —— 顶部时间轴（拖动查看历史）——
-let tlGeom = { contentW: 0, W: 0, svgW: 0 };
+// —— 名称缩写 ——
 function shortRepo(p) {
   const s = String(p).replace(/\\/g, '/');
   const parts = s.split('/').filter(Boolean);
   return parts.length > 4 ? '…/' + parts.slice(-3).join('/') : s;
 }
-function updateTimeline(L, W, svgW, tags = []) {
-  tlGeom = { contentW: Math.max(L.contentW, W), W, svgW };
-  const scrollable = svgW - W > 2;
-  const tlEl = $('#timeline');
-  tlEl.classList.toggle('static', !scrollable);
-  tlEl.title = scrollable ? '拖动查看历史，实心点是 release / tag' : '历史未超出窗口，无需滚动';
+
+// —— 时间轴（横：顶部水平；竖：右侧纵向）——
+let tlGeom = { len: 0, view: 0, total: 0 };
+function updateTimeline(L, W, H) {
+  const horizontal = isH();
+  tlGeom = horizontal
+    ? { len: L.contentW, view: W, total: L.svgW }
+    : { len: L.contentH, view: H, total: L.svgH };
+  const scrollable = tlGeom.total - tlGeom.view > 2;
+  const el = $('#timeline');
+  el.classList.toggle('static', !scrollable);
+  el.classList.toggle('vertical', !horizontal);
+  el.title = scrollable ? '拖动查看历史，实心点是 release / tag' : '历史未超出窗口，无需滚动';
   const marks = [];
-  const push = (x, color) => {
-    if (x === undefined) return;
-    const r = tlGeom.contentW > 0 ? x / tlGeom.contentW : 0;
+  const push = (t, color) => {
+    if (t === undefined) return;
+    const r = tlGeom.len > 0 ? t / tlGeom.len : 0;
     if (r < 0 || r > 1) return;
     if (marks.some((m) => Math.abs(m.r - r) < 0.012)) return;
     marks.push({ r, color });
   };
   for (const head of L.locals) {
     if (!/^release\//.test(head.name)) continue;
-    push(L.xOf.get(head.hash), L.chainColorOf(head.hash));
+    push(L.timeOf.get(head.hash), L.chainColorOf(head.hash));
   }
   for (const g of L.ghostChains) {
     if (!/^release\//.test(g.name.replace(/^[^/]+\//, ''))) continue;
-    push(g.tipX, g.color);
+    push(g.tipT, g.color);
   }
-  for (const t of tags) push(L.xOf.get(t.hash), '#EDE9DE');
-  $('#tl-marks').innerHTML = marks.map((m) => `<span class="tl-mark" style="left:${(m.r * 100).toFixed(2)}%;background:${m.color}"></span>`).join('');
+  for (const t of (lastData.tags || [])) {
+    const tt = L.timeOf.get(t.hash);
+    if (tt !== undefined) push(tt, '#EDE9DE');
+  }
+  const pos = horizontal ? 'left' : 'top';
+  $('#tl-marks').innerHTML = marks.map((m) => `<span class="tl-mark" style="${pos}:${(m.r * 100).toFixed(2)}%;background:${m.color}"></span>`).join('');
   updateTlView();
 }
 function updateTlView() {
+  const horizontal = isH();
   const scroll = $('#scroll');
-  const r = tlGeom.contentW > 0 ? (scroll.scrollLeft + tlGeom.W / 2) / tlGeom.contentW : 0.5;
-  $('#tl-view').style.left = `${(clamp(r, 0, 1) * 100).toFixed(2)}%`;
+  const pos = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+  const r = tlGeom.len > 0 ? (pos + tlGeom.view / 2) / tlGeom.len : 0.5;
+  const v = $('#tl-view');
+  v.style.left = horizontal ? `${(clamp(r, 0, 1) * 100).toFixed(2)}%` : '50%';
+  v.style.top = horizontal ? '50%' : `${(clamp(r, 0, 1) * 100).toFixed(2)}%`;
+  v.style.transform = 'translate(-50%, -50%) rotate(45deg)';
 }
-function tlSeek(clientX) {
+function tlSeek(clientX, clientY) {
   const el = $('#timeline');
   const rect = el.getBoundingClientRect();
-  let r = clamp((clientX - rect.left) / rect.width, 0, 1);
+  const horizontal = isH();
+  let r = horizontal
+    ? clamp((clientX - rect.left) / rect.width, 0, 1)
+    : clamp((clientY - rect.top) / rect.height, 0, 1);
   for (const m of el.querySelectorAll('.tl-mark')) {
-    const mr = parseFloat(m.style.left) / 100;
+    const mr = parseFloat(horizontal ? m.style.left : m.style.top) / 100;
     if (Math.abs(mr - r) < 0.03) { r = mr; break; }
   }
   const scroll = $('#scroll');
-  scroll.scrollLeft = clamp(r * tlGeom.contentW - tlGeom.W / 2, 0, Math.max(0, tlGeom.svgW - tlGeom.W));
+  const target = clamp(r * tlGeom.len - tlGeom.view / 2, 0, Math.max(0, tlGeom.total - tlGeom.view));
+  if (horizontal) scroll.scrollLeft = target; else scroll.scrollTop = target;
   lastUserScroll = performance.now();
   updateTlView();
 }
@@ -714,14 +756,14 @@ function hitEl(x, y, commit, tag, chain, tags) {
   return `<span class="hit" style="left:${S(x)}px;top:${S(y)}px" data-hash="${esc(commit.hash)}" data-chain="${esc(chain || '')}" data-subject="${esc(commit.subject || '(无提交信息)')}" data-time="${commit.time}" data-tag="${tag}" data-tags="${esc(tags || '')}"></span>`;
 }
 
-// —— 提交详情卡（双击提交点）——
+// —— 提交详情卡 ——
 async function openDetail(hash, el) {
   const card = $('#detail');
   card.hidden = false;
   card.innerHTML = '<div class="meta">读取中…</div>';
   positionNear(card, el);
   try {
-    const d = await fetch(`/api/commit/${encodeURIComponent(hash)}`, { cache: 'no-store' }).then((r) => r.json());
+    const d = await fetch(`${API}/api/commit/${encodeURIComponent(hash)}`, { cache: 'no-store' }).then((r) => r.json());
     if (!d.ok) throw new Error(d.error);
     const when = new Date(d.time * 1000).toLocaleString();
     const files = d.files.slice(0, 12).map((f) =>
@@ -738,15 +780,14 @@ async function openDetail(hash, el) {
     card.innerHTML = `<div class="meta">${esc(err.message)}</div>`;
   }
 }
-
 function positionNear(card, el) {
   const rect = el.getBoundingClientRect();
-  const w = card.offsetWidth, h = card.offsetHeight;
+  const w = card.offsetWidth, hh = card.offsetHeight;
   let left = rect.right + 14;
   let top = rect.top;
   if (left + w > window.innerWidth - 8) left = rect.left - w - 14;
   if (left < 8) left = Math.min(rect.right + 14, window.innerWidth - w - 8);
-  if (top + h > window.innerHeight - 8) top = window.innerHeight - h - 8;
+  if (top + hh > window.innerHeight - 8) top = window.innerHeight - hh - 8;
   if (top < 8) top = 8;
   card.style.left = `${Math.max(8, left)}px`;
   card.style.top = `${top}px`;
@@ -763,51 +804,59 @@ function showNotice(text) {
   noticeTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
-let knownChains = new Set();
+// —— 聚焦 ——
 function setFocus(chain) {
   focusChain = chain;
   if (lastData) render(lastData);
   if (!chain || !lastLayout) return;
-  // 聚焦到屏幕外的分支时，把它滚进视野
   const ch = lastLayout.chainById.get(chain);
   if (!ch || !ch.commits.length) return;
-  let x = -Infinity;
-  for (const h of ch.commits) x = Math.max(x, lastLayout.xOf.get(h) ?? -Infinity);
   const scroll = $('#scroll');
-  const viewLeft = scroll.scrollLeft;
-  const viewRight = viewLeft + scroll.clientWidth;
-  if (x < viewLeft + 40 || x > viewRight - 40) {
-    const target = clamp(x - scroll.clientWidth * 0.7, 0, Math.max(0, scroll.scrollWidth - scroll.clientWidth));
-    progTarget = target;
-    scroll.scrollLeft = target;
-    lastUserScroll = performance.now();
+  let t = -Infinity;
+  for (const hash of ch.commits) t = Math.max(t, lastLayout.timeOf.get(hash) ?? -Infinity);
+  if (isH()) {
+    const viewLeft = scroll.scrollLeft, viewRight = viewLeft + scroll.clientWidth;
+    if (t < viewLeft + 40 || t > viewRight - 40) {
+      const target = clamp(t - scroll.clientWidth * 0.7, 0, Math.max(0, scroll.scrollWidth - scroll.clientWidth));
+      progTarget = target;
+      scroll.scrollLeft = target;
+      lastUserScroll = performance.now();
+    }
+  } else {
+    const viewTop = scroll.scrollTop, viewBottom = viewTop + scroll.clientHeight;
+    if (t < viewTop + 40 || t > viewBottom - 40) {
+      const target = clamp(t - scroll.clientHeight * 0.3, 0, Math.max(0, scroll.scrollHeight - scroll.clientHeight));
+      progTarget = target;
+      scroll.scrollTop = target;
+      lastUserScroll = performance.now();
+    }
   }
 }
-
-// 可导航的分支：有名字、有车道
 function chainEntries(L) {
   const entries = [];
   for (const [id, ch] of L.chainById) {
     if (!ch || !ch.name) continue;
-    const row = L.rowOfChain.get(id);
-    if (row === undefined) continue;
-    let x = -Infinity;
-    for (const h of ch.commits) x = Math.max(x, L.xOf.get(h) ?? -Infinity);
-    entries.push({ id, row, x });
+    const lane = L.laneOfChain.get(id);
+    if (lane === undefined) continue;
+    let t = -Infinity;
+    for (const hash of ch.commits) t = Math.max(t, L.timeOf.get(hash) ?? -Infinity);
+    entries.push({ id, lane, t });
   }
   return entries;
 }
 
-// —— 自动停在最新（右侧）——
+// —— 自动停在最新 ——
 let lastUserScroll = -Infinity;
 let progTarget = -1;
-function scrollToNewest(svgW, W) {
+function scrollToNewest() {
   if (performance.now() - lastUserScroll < 6000) return;
   const scroll = $('#scroll');
-  const target = Math.max(0, svgW - W);
-  if (Math.abs(scroll.scrollLeft - target) < 2) return;
+  const horizontal = isH();
+  const target = horizontal ? Math.max(0, lastLayout.svgW - scroll.clientWidth) : 0;
+  const cur = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+  if (Math.abs(cur - target) < 2) return;
   progTarget = target;
-  scroll.scrollLeft = target;
+  if (horizontal) scroll.scrollLeft = target; else scroll.scrollTop = target;
 }
 
 // —— 交互 ——
@@ -815,23 +864,24 @@ const tip = $('#tip');
 function bindUi() {
   const scroll = $('#scroll');
   scroll.addEventListener('scroll', () => {
-    if (Math.abs(scroll.scrollLeft - progTarget) > 3) lastUserScroll = performance.now();
+    const horizontal = isH();
+    const pos = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+    if (Math.abs(pos - progTarget) > 3) lastUserScroll = performance.now();
     tip.hidden = true;
     const d = $('#detail');
     if (d) d.hidden = true;
     updateTlView();
   }, { passive: true });
 
-  // 时间轴拖动 / 点击跳转
   const tlEl = $('#timeline');
   let tlDrag = false;
   tlEl.addEventListener('pointerdown', (e) => {
     tlDrag = true;
     try { tlEl.setPointerCapture(e.pointerId); } catch {}
-    tlSeek(e.clientX);
+    tlSeek(e.clientX, e.clientY);
     e.preventDefault();
   });
-  tlEl.addEventListener('pointermove', (e) => { if (tlDrag) tlSeek(e.clientX); });
+  tlEl.addEventListener('pointermove', (e) => { if (tlDrag) tlSeek(e.clientX, e.clientY); });
   tlEl.addEventListener('pointerup', () => { tlDrag = false; });
   tlEl.addEventListener('pointercancel', () => { tlDrag = false; });
 
@@ -843,7 +893,6 @@ function bindUi() {
     const tagLine = el.dataset.tags ? `<em>tag: ${esc(el.dataset.tags)}</em>` : '';
     tip.innerHTML = `<b>${esc(el.dataset.tag)} · ${esc(el.dataset.hash.slice(0, 7))}</b><span>${esc(el.dataset.subject)}</span><em>${when}</em>${tagLine}<em>双击查看详情</em>`;
     tip.hidden = false;
-    // 自适应位置：默认在命中点右下方，靠近窗口边缘时翻转 / 收进窗口
     const rect = el.getBoundingClientRect();
     const tw = tip.offsetWidth, th = tip.offsetHeight;
     let left = rect.right + 12;
@@ -858,22 +907,6 @@ function bindUi() {
   $('#hits').addEventListener('mouseout', (e) => { if (!tip.contains(e.relatedTarget)) tip.hidden = true; });
   tip.addEventListener('mouseleave', () => { tip.hidden = true; });
 
-  const toggle = $('#mode-toggle');
-  toggle.addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-mode]');
-    if (!btn) return;
-    setMode(btn.dataset.mode);
-  });
-
-  // 点击分支名 / 提交点 → 聚焦该链；再点一次或 Esc 取消
-  $('#chips').addEventListener('click', (e) => {
-    const el = e.target.closest('[data-chain]');
-    if (!el) return;
-    const id = el.getAttribute('data-chain');
-    if (!id) return;
-    setFocus(focusChain === id ? null : id);
-  });
-  // 单击聚焦（延迟 220ms 以区分双击），双击打开提交详情
   let hitClickTimer = 0;
   $('#hits').addEventListener('click', (e) => {
     const el = e.target.closest('.hit');
@@ -890,23 +923,35 @@ function bindUi() {
     openDetail(el.dataset.hash, el);
   });
 
-  // 点击详情卡以外的地方关闭详情卡
+  $('#chips').addEventListener('click', (e) => {
+    const el = e.target.closest('[data-chain]');
+    if (!el) return;
+    const id = el.getAttribute('data-chain');
+    if (!id) return;
+    setFocus(focusChain === id ? null : id);
+  });
+
   document.addEventListener('click', (e) => {
     const d = $('#detail');
-    if (!d || d.hidden) return;
-    if (d.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('.hit')) return;
-    d.hidden = true;
+    if (d && !d.hidden) {
+      if (!d.contains(e.target) && !(e.target.closest && e.target.closest('.hit'))) d.hidden = true;
+    }
+    if (focusChain && !(e.target.closest && e.target.closest('[data-chain]'))) setFocus(null);
+    const menu = $('#repo-menu');
+    if (menu && !menu.hidden && !(e.target.closest && e.target.closest('.repo-wrap'))) menu.hidden = true;
   });
 
-  // 点击分支以外任意位置 → 退出聚焦（聚焦只是查看，不需要精确点到原处）
-  document.addEventListener('click', (e) => {
-    if (!focusChain) return;
-    if (e.target.closest && e.target.closest('[data-chain]')) return;
-    setFocus(null);
+  const toggle = $('#mode-toggle');
+  toggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    setMode(btn.dataset.mode);
   });
 
-  // 快捷键：T 切换视角 / F 聚焦当前分支 / R 刷新 / End 回到最新 / Esc 取消聚焦
+  $('#orient').addEventListener('click', () => {
+    setOrientation(isH() ? 'v' : 'h');
+  });
+
   window.addEventListener('keydown', (e) => {
     if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     const k = e.key.toLowerCase();
@@ -916,50 +961,49 @@ function bindUi() {
       const cur = lastData && (lastData.refs.find((x) => x.current) || {}).name;
       const id = cur ? 'h:' + cur : null;
       if (id && knownChains.has(id)) setFocus(focusChain === id ? null : id);
-    } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') && focusChain && lastLayout) {
+    } else if (e.key === 'Escape') {
+      setFocus(null);
+      tip.hidden = true;
+      const d = $('#detail'); if (d) d.hidden = true;
+      const menu = document.getElementById('repo-menu'); if (menu) menu.hidden = true;
+    } else if (e.key === 'End') {
+      lastUserScroll = -Infinity;
+      if (lastData) render(lastData);
+    } else if (e.key.startsWith('Arrow') && focusChain && lastLayout) {
       e.preventDefault();
       const entries = chainEntries(lastLayout);
       const cur = entries.find((x) => x.id === focusChain);
       if (!cur) return;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        // 同一车道内按 x 顺序切换相邻分支
-        const same = entries.filter((x) => x.row === cur.row).sort((a, b) => a.x - b.x);
+      const horizontal = isH();
+      const prevKey = horizontal ? 'ArrowLeft' : 'ArrowUp';
+      const nextKey = horizontal ? 'ArrowRight' : 'ArrowDown';
+      const laneKeyDown = horizontal ? 'ArrowDown' : 'ArrowRight';
+      const laneKeyUp = horizontal ? 'ArrowUp' : 'ArrowLeft';
+      if (e.key === prevKey || e.key === nextKey) {
+        const same = entries.filter((x) => x.lane === cur.lane).sort((a, b) => a.t - b.t);
         const i = same.findIndex((x) => x.id === cur.id);
-        const j = i + (e.key === 'ArrowLeft' ? -1 : 1);
+        const j = i + (e.key === prevKey ? -1 : 1);
         if (i >= 0 && j >= 0 && j < same.length) setFocus(same[j].id);
-      } else {
-        // 上下切换到相邻车道，取 x 最接近当前分支的那条
-        const rows = [...new Set(entries.map((x) => x.row))].sort((a, b) => a - b);
-        const i = rows.indexOf(cur.row);
-        const j = i + (e.key === 'ArrowUp' ? -1 : 1);
-        if (j < 0 || j >= rows.length) return;
-        const candidates = entries.filter((x) => x.row === rows[j]);
-        candidates.sort((a, b) => Math.abs(a.x - cur.x) - Math.abs(b.x - cur.x));
+      } else if (e.key === laneKeyDown || e.key === laneKeyUp) {
+        const lanes = [...new Set(entries.map((x) => x.lane))].sort((a, b) => a - b);
+        const i = lanes.indexOf(cur.lane);
+        const j = i + (e.key === laneKeyDown ? 1 : -1);
+        if (j < 0 || j >= lanes.length) return;
+        const candidates = entries.filter((x) => x.lane === lanes[j]);
+        candidates.sort((a, b) => Math.abs(a.t - cur.t) - Math.abs(b.t - cur.t));
         if (candidates[0]) setFocus(candidates[0].id);
       }
-    } else if (e.key === 'Escape') {
-      setFocus(null);
-      tip.hidden = true;
-      const d = $('#detail');
-      if (d) d.hidden = true;
-      const menuEl = document.getElementById('repo-menu');
-      if (menuEl) menuEl.hidden = true;
-    } else if (e.key === 'End') {
-      lastUserScroll = -Infinity;
-      if (lastData) render(lastData);
     }
   });
 
-  // —— 仓库切换下拉 ——
-  const repoBtn = $('#repo');
+  // 仓库切换
   const repoMenu = $('#repo-menu');
-  const closeMenu = () => { repoMenu.hidden = true; };
   const openMenu = async () => {
     repoMenu.hidden = false;
     const list = $('#repo-list');
     list.innerHTML = '<div class="repo-menu-title">读取中…</div>';
     try {
-      const d = await fetch('/api/repos', { cache: 'no-store' }).then((r) => r.json());
+      const d = await fetch(`${API}/api/repos`, { cache: 'no-store' }).then((r) => r.json());
       list.innerHTML = (d.recent || []).length
         ? d.recent.map((p) => `<button type="button" class="repo-item${p === d.current ? ' current' : ''}" data-path="${esc(p)}" title="${esc(p)}">${esc(p)}</button>`).join('')
         : '<div class="repo-menu-title">还没有最近仓库</div>';
@@ -969,19 +1013,15 @@ function bindUi() {
   };
   async function switchRepo(path) {
     try {
-      const d = await fetch('/api/repo', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
-      }).then((r) => r.json());
+      const d = await fetch(`${API}/api/repo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }).then((r) => r.json());
       if (!d.ok) throw new Error(d.error);
-      closeMenu();
+      repoMenu.hidden = true;
       refresh();
-    } catch (error) {
-      showNotice(error.message);
-    }
+    } catch (error) { showNotice(error.message); }
   }
-  repoBtn.addEventListener('click', (e) => {
+  $('#repo').addEventListener('click', (e) => {
     e.stopPropagation();
-    if (repoMenu.hidden) openMenu(); else closeMenu();
+    if (repoMenu.hidden) openMenu(); else repoMenu.hidden = true;
   });
   $('#repo-list').addEventListener('click', (e) => {
     const item = e.target.closest('.repo-item');
@@ -989,17 +1029,12 @@ function bindUi() {
   });
   $('#repo-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      const value = e.target.value.trim();
-      if (value) switchRepo(value);
+      const v = e.target.value.trim();
+      if (v) switchRepo(v);
     }
   });
-  document.addEventListener('click', (e) => {
-    if (repoMenu.hidden) return;
-    if (e.target.closest && e.target.closest('.repo-wrap')) return;
-    repoMenu.hidden = true;
-  });
 
-  // —— fetch：手动 + 定时（AUTO）——
+  // fetch
   const fetchBtn = $('#fetch');
   const autoBtn = $('#auto');
   let autoTimer = 0;
@@ -1008,29 +1043,51 @@ function bindUi() {
     fetchBtn.classList.add('busy');
     fetchBtn.textContent = 'FETCH…';
     try {
-      const d = await fetch('/api/fetch', { method: 'POST' }).then((r) => r.json());
+      const d = await fetch(`${API}/api/fetch`, { method: 'POST' }).then((r) => r.json());
       if (!d.ok) throw new Error(d.error);
       await refresh();
       if (verbose) showNotice('已 fetch');
-    } catch (error) {
-      showNotice(error.message);
-      console.error(error);
-    } finally {
-      fetchBtn.classList.remove('busy');
-      fetchBtn.textContent = 'FETCH';
-    }
+    } catch (error) { showNotice(error.message); console.error(error); }
+    finally { fetchBtn.classList.remove('busy'); fetchBtn.textContent = 'FETCH'; }
   }
   fetchBtn.addEventListener('click', () => doFetch(true));
   function setAuto(on) {
     autoBtn.classList.toggle('on', on);
-    try { localStorage.setItem('gitty-auto-fetch', on ? '1' : '0'); } catch { /* 忽略 */ }
+    try { localStorage.setItem('gitty-auto-fetch', on ? '1' : '0'); } catch {}
     clearInterval(autoTimer);
     autoTimer = on ? setInterval(() => doFetch(false), 60_000) : 0;
   }
   autoBtn.addEventListener('click', () => setAuto(!autoBtn.classList.contains('on')));
-  try { if (localStorage.getItem('gitty-auto-fetch') === '1') setAuto(true); } catch { /* 忽略 */ }
+  try { if (localStorage.getItem('gitty-auto-fetch') === '1') setAuto(true); } catch {}
 
   window.addEventListener('resize', () => { if (lastData) render(lastData); });
+  placeTimeline();
+  updateOrientButton();
+}
+
+function placeTimeline() {
+  const tl = $('#timeline');
+  if (isH()) document.querySelector('header').insertBefore(tl, document.querySelector('.h-right'));
+  else $('#graph').appendChild(tl);
+}
+function updateOrientButton() {
+  const btn = $('#orient');
+  if (!btn) return;
+  btn.textContent = isH() ? '竖' : '横';
+  btn.title = isH() ? '切换到竖版' : '切换到横版';
+}
+function setOrientation(next) {
+  orientation = next;
+  try { localStorage.setItem('gitty-orient', next); } catch {}
+  document.documentElement.dataset.orient = next;
+  placeTimeline();
+  updateOrientButton();
+  if (isTauri) {
+    const api = window.__TAURI__;
+    const inv = api && (api.core?.invoke || api.invoke);
+    if (inv) inv('set_orientation', { orientation: next }).catch((e) => console.error(e));
+  }
+  if (lastData) render(lastData);
 }
 
 function setMode(mode) {
@@ -1046,7 +1103,7 @@ function setMode(mode) {
 
 async function refresh() {
   try {
-    const data = await fetch('/api/graph', { cache: 'no-store' }).then((r) => r.json());
+    const data = await fetch(`${API}/api/graph`, { cache: 'no-store' }).then((r) => r.json());
     if (!data.ok) throw new Error(data.error);
     render(data);
     $('#status').className = 'status';
@@ -1054,7 +1111,6 @@ async function refresh() {
   } catch (error) {
     $('#status').className = 'status offline';
     $('#status').title = error.message;
-    // 首次加载就失败（例如安装版还没选仓库）时给明确引导；已有画面则保留最后一帧
     if (!lastData) {
       const empty = $('#empty');
       empty.hidden = false;
@@ -1068,5 +1124,10 @@ async function refresh() {
 }
 
 bindUi();
+if (isTauri && orientation === 'v') {
+  const api = window.__TAURI__;
+  const inv = api && (api.core?.invoke || api.invoke);
+  if (inv) inv('set_orientation', { orientation: 'v' }).catch(() => {});
+}
 refresh();
 setInterval(refresh, 2200);

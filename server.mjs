@@ -111,6 +111,15 @@ async function graph() {
 }
 
 const server = createServer(async (req, res) => {
+  // Tauri 内置资源来源（http://tauri.localhost）跨域访问本地 API
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/graph') {
     // A person opening the diagnostic URL should land on the graph UI.

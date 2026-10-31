@@ -1,13 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Gitty",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "com.gitty.radar",
   "build": {
     "frontendDist": "../public",
     "features": ["tray"]
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [],
     "security": {
       "csp": null
