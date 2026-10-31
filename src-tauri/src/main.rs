@@ -297,11 +297,13 @@ fn place_macos(window: &tauri::WebviewWindow, vertical: bool) {
     }
 }
 
-/// 菜单栏用的 18pt 菱形模板图：黑色形状 + alpha，系统会自动适配浅色/深色菜单栏。
-#[cfg(target_os = "macos")]
-fn tray_diamond_icon() -> tauri::image::Image<'static> {
+/// 托盘菱形：32px、四重采样抗锯齿。
+/// fill=None 时是黑色模板图（macOS 菜单栏自动适配明暗）；Some(rgb) 时填充品牌色（Windows 托盘）。
+#[cfg(any(windows, target_os = "macos"))]
+fn tray_diamond_icon(fill: Option<(u8, u8, u8)>) -> tauri::image::Image<'static> {
     const SIZE: u32 = 32;
     const SAMPLES: u32 = 4;
+    let (r, g, b) = fill.unwrap_or((0, 0, 0));
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
     let center = (SIZE as f64 - 1.0) / 2.0;
     let radius = 13.0;
@@ -320,6 +322,9 @@ fn tray_diamond_icon() -> tauri::image::Image<'static> {
             if hits > 0 {
                 let alpha = (hits as f64 / (SAMPLES * SAMPLES) as f64 * 255.0).round() as u8;
                 let i = ((y * SIZE + x) * 4) as usize;
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
                 rgba[i + 3] = alpha;
             }
         }
@@ -341,7 +346,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .build()?;
 
     TrayIconBuilder::with_id("gitty-tray")
-        .icon(tray_diamond_icon())
+        .icon(tray_diamond_icon(None))
         .icon_as_template(true)
         .tooltip("Gitty — 显示 / 隐藏 / 退出")
         .menu(&menu)
@@ -362,6 +367,45 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             _ => {}
         })
         .build(app.handle())?;
+    Ok(())
+}
+
+/// Windows 系统托盘：品牌红菱形 + 右键菜单（显示 / 隐藏 / 退出）。
+#[cfg(windows)]
+fn setup_windows_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::MenuBuilder;
+    use tauri::tray::TrayIconBuilder;
+
+    let menu = MenuBuilder::new(app)
+        .text("show", "显示 Gitty")
+        .text("hide", "隐藏 Gitty")
+        .separator()
+        .text("quit", "退出 Gitty")
+        .build()?;
+
+    TrayIconBuilder::with_id("gitty-tray")
+        .icon(tray_diamond_icon(Some((255, 107, 85)))) // #FF6B55
+        .tooltip("Gitty — 显示 / 隐藏 / 退出")
+        .menu(&menu)
+        .show_menu_on_left_click(false) // Windows 上右键弹出菜单
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
+            "hide" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            "quit" => {
+                cleanup_server(app);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
     Ok(())
 }
 
@@ -468,6 +512,14 @@ fn main() {
                     Some(16.0),
                 ) {
                     eprintln!("apply_vibrancy failed: {err}");
+                }
+            }
+
+            // Windows：系统托盘（窗口无任务栏入口，靠它隐藏 / 唤回 / 退出）
+            #[cfg(windows)]
+            {
+                if let Err(err) = setup_windows_tray(app.handle()) {
+                    eprintln!("setup_windows_tray failed: {err}");
                 }
             }
 
