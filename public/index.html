@@ -45,6 +45,15 @@
       <section id="graph" class="graph" hidden>
         <div id="scroll" class="scroll">
           <svg id="canvas" role="img" aria-label="Git 分支雷达">
+            <!-- macOS/WKWebView 不渲染 SVG 组上的 CSS blur()，改用 SVG 滤镜 -->
+            <defs id="filters">
+              <filter id="gitty-blur-soft" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="1.4" />
+              </filter>
+              <filter id="gitty-blur-strong" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.4" />
+              </filter>
+            </defs>
             <defs id="defs"></defs>
             <g id="backRemote" class="layer back-remote"></g>
             <g id="backLocal" class="layer back-local"></g>

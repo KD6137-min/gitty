@@ -167,6 +167,14 @@ html[data-mode="remote"] .front-remote { opacity: 1; }
 html[data-mode="remote"] .front-edges { opacity: 0; }
 html[data-mode="remote"] .front-dots { opacity: 0; }
 
+/* macOS：WKWebView 不渲染 SVG 组上的 CSS blur()，改用 SVG 滤镜，
+   保证非前台一方的提交点也是模糊/毛玻璃，而不只是变暗 */
+html.tauri-macos .back-remote,
+html.tauri-macos .back-local { filter: url(#gitty-blur-strong); }
+html.tauri-macos .back-dots { filter: url(#gitty-blur-soft); }
+html.tauri-macos .rings { filter: url(#gitty-blur-soft); }
+html.tauri-macos[data-mode="remote"] .rings { filter: none; }
+
 /* 图形 */
 .edge { stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .edge.stub { stroke-width: 1.4; stroke-dasharray: 2 5; opacity: .3; }
