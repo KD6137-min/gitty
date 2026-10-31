@@ -604,10 +604,22 @@ function render(data) {
   // 名字：横版在尖端右侧；竖版旋转在尖端上方
   const chips = [];
   const drawn = new Set();
-  const chipText = (x, y, text, color, chainId, extraCls = '', extraTspans = '') => {
+  // 分支名按第一个 / 拆成两行（竖版用）
+  const splitName = (name) => {
+    const i = name.indexOf('/');
+    return i > 0 && i < name.length - 1 ? [name.slice(0, i), name.slice(i + 1)] : [name, null];
+  };
+  const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '') => {
     const cls = `chip${extraCls}${dim(chainId)}`;
-    if (isH()) return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${text}${extraTspans}</text>`;
-    return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 6)}" y="${S(y - 12)}" transform="rotate(-90 ${S(x + 6)} ${S(y - 12)})" text-anchor="start" style="fill:${color}">${text}${extraTspans}</text>`;
+    if (isH()) {
+      const text = lines.filter(Boolean).join('/');
+      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
+    }
+    const [l1, l2] = lines;
+    if (!l2) {
+      return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 12)}" text-anchor="middle" style="fill:${color}">${esc(l1)}${extraHtml}</text>`;
+    }
+    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}"><tspan x="${S(x)}" y="${S(y - 24)}">${esc(l1)}</tspan><tspan x="${S(x)}" y="${S(y - 12)}">${esc(l2)}${extraHtml}</tspan></text>`;
   };
   for (const head of L.locals) {
     const lane = L.laneOf.get(head.hash);
@@ -627,14 +639,15 @@ function render(data) {
       ? (isH() ? Math.max(t, st.upT) : Math.min(t, st.upT))
       : t;
     const lp = isH() ? { x: labelT, y: p.y } : { x: p.x, y: labelT };
-    chips.push(chipText(lp.x, lp.y, `${esc(head.name)}${aliasTxt}`, color, chainId, isCur ? ' current' : '', curMark));
+    const localCls = ' chip-local' + (isCur ? ' current' : '');
+    chips.push(chipText(lp.x, lp.y, splitName(head.name), color, chainId, localCls, `${aliasTxt}${curMark}`));
     if (st && st.upstream) {
       const upPoint = isH() ? { x: st.upT, y: p.y } : { x: p.x, y: st.upT };
-      chips.push(chipText(upPoint.x, upPoint.y, esc(st.upstream), color, chainId, '', ''));
+      chips.push(chipText(upPoint.x, upPoint.y, splitName(st.upstream), color, chainId, ' chip-remote', ''));
     }
   }
   for (const g of L.ghostChains) {
-    chips.push(chipText(g.tipX, g.tipY, esc(g.name), g.color, g.chain, ' chip-ghost'));
+    chips.push(chipText(g.tipX, g.tipY, splitName(g.name), g.color, g.chain, ' chip-ghost'));
   }
   // tag：三角 + 名称
   for (const [hash, names] of tagByHash) {
@@ -662,7 +675,7 @@ function render(data) {
     for (const [pid, e] of latest) {
       const ch = L.chainById.get(pid);
       if (!ch || !ch.name) continue;
-      chips.push(chipText(e.pX, e.pY - 2, esc(ch.name), ch.color, pid, ' merge-label'));
+      chips.push(chipText(e.pX, e.pY - 2, splitName(ch.name), ch.color, pid, ' merge-label'));
     }
   }
   $('#chips').innerHTML = chips.join('');
@@ -951,6 +964,9 @@ function bindUi() {
   $('#orient').addEventListener('click', () => {
     setOrientation(isH() ? 'v' : 'h');
   });
+  $('#mode-single').addEventListener('click', () => {
+    setMode(document.documentElement.dataset.mode === 'local' ? 'remote' : 'local');
+  });
 
   window.addEventListener('keydown', (e) => {
     if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
@@ -1063,6 +1079,7 @@ function bindUi() {
   window.addEventListener('resize', () => { if (lastData) render(lastData); });
   placeTimeline();
   updateOrientButton();
+  setMode(document.documentElement.dataset.mode || 'local');
 }
 
 function placeTimeline() {
@@ -1099,6 +1116,12 @@ function setMode(mode) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', String(on));
   });
+  // 竖版单按钮：显示要切换到的目标视角
+  const single = $('#mode-single');
+  if (single) {
+    single.textContent = mode === 'local' ? '远端' : '本地';
+    single.title = mode === 'local' ? '切换到远端视角' : '切换到本地视角';
+  }
 }
 
 async function refresh() {

@@ -223,6 +223,14 @@ html[data-mode="remote"] .front-remote .remote-line { stroke-width: 2.4; stroke-
 .chip { pointer-events: auto; cursor: pointer; font: 600 19px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 4px; stroke-linejoin: round; }
 .chip.current { font-weight: 700; }
 .chip-head { font-size: 24px; }
+/* 竖版：水平两行的分支名 */
+.chip-v { font-size: 10px; stroke-width: 2.5px; }
+.chip-v .chip-count { font-size: 8px; }
+.chip-v .chip-head { font-size: 10px; }
+/* 竖版用单按钮替代「本地 / 远端」分段开关 */
+.mode-single { display: none; }
+html[data-orient="v"] .mode-single { display: inline-block; }
+html[data-orient="v"] .mode-toggle { display: none; }
 .chip-count { font: 500 14px ui-monospace, Consolas, monospace; fill: var(--muted); }
 .chip-remote { display: none; }
 .chip-remote.muted { opacity: .45; }
