@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "identifier": "com.gitty.radar",
   "build": {
-    "frontendDist": "../public"
+    "frontendDist": "../public",
+    "features": ["tray"]
   },
   "app": {
     "windows": [],

@@ -7,6 +7,9 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 const BAR_HEIGHT: f64 = 315.0;
 
+/// 随应用启动的 Node 服务；退出时杀掉，避免留下占用 4173 的孤儿进程。
+struct ServerProcess(std::sync::Mutex<Option<std::process::Child>>);
+
 /// 从可执行文件所在目录向上找 server.mjs（开发时在 target/debug 里也能找到项目根）
 fn project_root() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
@@ -57,9 +60,13 @@ fn node_binary() -> PathBuf {
 
 /// 启动随附的 Node 服务；如果 4173 已经在监听则直接复用。
 /// 安装版里 server.mjs 与 public/ 作为资源放在 exe 旁边（macOS 为 Contents/Resources）。
-fn spawn_server(root: &Path, data_dir: Option<PathBuf>, last_repo: Option<String>) {
+fn spawn_server(
+    root: &Path,
+    data_dir: Option<PathBuf>,
+    last_repo: Option<String>,
+) -> Option<std::process::Child> {
     if server_ready() {
-        return;
+        return None;
     }
     let mut cmd = std::process::Command::new(node_binary());
     cmd.arg("server.mjs");
@@ -89,13 +96,14 @@ fn spawn_server(root: &Path, data_dir: Option<PathBuf>, last_repo: Option<String
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let _ = cmd.spawn();
+    let child = cmd.spawn().ok()?;
     for _ in 0..40 {
         if server_ready() {
             break;
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+    Some(child)
 }
 
 /// 主显示器的可用工作区（扣掉任务栏），单位：物理像素
@@ -205,7 +213,6 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSScreen, NSWindow,
     };
-    use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let Some(mtm) = MainThreadMarker::new() else { return };
@@ -227,8 +234,9 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
             height,
         },
     };
-    // 桌面层级：位于所有普通窗口之下、壁纸之上，点击不会被抬到其它应用前面。
-    let level = CGWindowLevelForKey(CGWindowLevelKey::DesktopWindowLevelKey) as objc2_app_kit::NSWindowLevel;
+    // 比普通窗口低一层（-1）：普通窗口始终盖在它上面，但它能接收点击。
+    // 更低的桌面层级会被 Finder 桌面窗口吞掉鼠标事件。
+    let level: objc2_app_kit::NSWindowLevel = -1;
 
     // SAFETY: ns_window 是 Tauri 返回的有效 NSWindow 指针，且 setup 运行在主线程。
     unsafe {
@@ -242,12 +250,65 @@ fn apply_bar_macos(window: &tauri::WebviewWindow) {
     }
 }
 
+/// macOS 菜单栏图标：附件应用没有 Dock 图标和窗口装饰，用它来显示/隐藏/退出。
+#[cfg(target_os = "macos")]
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::menu::MenuBuilder;
+    use tauri::tray::TrayIconBuilder;
+
+    let menu = MenuBuilder::new(app.handle())
+        .text("show", "显示 Gitty")
+        .text("hide", "隐藏 Gitty")
+        .separator()
+        .text("quit", "退出 Gitty")
+        .build()?;
+
+    TrayIconBuilder::with_id("gitty-tray")
+        .title("Gitty")
+        .tooltip("Gitty — 显示 / 隐藏 / 退出")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "hide" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app.handle())?;
+    Ok(())
+}
+
+/// 退出时停止随应用启动的 Node 服务（复用已有服务时不会动它）。
+fn cleanup_server(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<ServerProcess>() {
+        let child = state.0.lock().ok().and_then(|mut guard| guard.take());
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
             // macOS：附件应用，不显示 Dock 图标，也不参与 Cmd+Tab
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                if let Err(err) = setup_tray(app) {
+                    eprintln!("setup_tray failed: {err}");
+                }
+            }
 
             // 最近仓库记录写到用户数据目录（安装目录通常不可写）
             let data_dir = app.path().app_data_dir().ok();
@@ -267,9 +328,8 @@ fn main() {
             });
             #[cfg(not(target_os = "macos"))]
             let root = project_root();
-            if let Some(root) = root {
-                spawn_server(&root, data_dir, last_repo);
-            }
+            let server = root.and_then(|root| spawn_server(&root, data_dir, last_repo));
+            app.manage(ServerProcess(std::sync::Mutex::new(server)));
 
             let url = WebviewUrl::External("http://localhost:4173".parse().expect("url"));
             #[allow(unused_mut)]
@@ -283,10 +343,10 @@ fn main() {
                 .minimizable(false)
                 .skip_taskbar(true)
                 .shadow(false);
-            // macOS：启动时不抢焦点（Windows 保持原有行为）
+            // macOS：点击未激活的窗口时，第一次点击也直接落到网页内容上
             #[cfg(target_os = "macos")]
             {
-                builder = builder.focused(false);
+                builder = builder.focused(false).accept_first_mouse(true);
             }
             let window = builder.build()?;
 
@@ -318,7 +378,6 @@ fn main() {
             // macOS：原生毛玻璃 + 贴主屏底部（Dock 之上）
             #[cfg(target_os = "macos")]
             {
-                // 先设深色窗口外观和桌面层级，再挂 vibrancy（材质会继承窗口外观）
                 apply_bar_macos(&window);
                 // HUD 材质 + Active 状态：附件应用几乎不会成为活跃窗口，
                 // 固定 Active 才能一直保持毛玻璃的鲜明效果。
@@ -334,6 +393,11 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                cleanup_server(app);
+            }
+        });
 }

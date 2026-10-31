@@ -4,6 +4,10 @@ version = "1.0.0"
 description = "Gitty branch radar"
 edition = "2021"
 
+[features]
+# 由 tauri.conf.json 的 build.features 启用；仅 macOS 会真正创建菜单栏图标
+tray = ["tauri/tray-icon"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -19,4 +23,3 @@ window-vibrancy = "0.8"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAppearance", "NSScreen", "NSWindow", "NSResponder"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGWindowLevel"] }
