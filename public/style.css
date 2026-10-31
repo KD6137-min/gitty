@@ -12,8 +12,10 @@
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 html.tauri, html.tauri body { background: transparent !important; }
-/* Tauri 里由系统 Acrylic 提供模糊，CSS 只留很轻的暗色叠加 */
+/* Tauri 里由系统 Acrylic / vibrancy 提供模糊，CSS 只留很轻的暗色叠加 */
 html.tauri .radar { background: rgba(18, 18, 16, .22); -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* macOS：与 NSVisualEffectView 的 16px 圆角保持一致（顶部两角） */
+html.tauri-macos .radar { border-radius: 16px 16px 0 0; overflow: hidden; }
 body {
   margin: 0; min-width: 640px; background: #C6C2B8; color: var(--ink);
   font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;

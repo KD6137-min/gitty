@@ -12,6 +12,10 @@ const S = (v) => Number(v).toFixed(1);
 // 在 Tauri 壳里运行时让页面背景透明，毛玻璃才能真正透出桌面
 if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
   document.documentElement.classList.add('tauri');
+  // macOS 的 vibrancy 视图圆角为 16，页面叠加层同步圆角，避免四角露出深色方块
+  if (/Macintosh/.test(navigator.userAgent)) {
+    document.documentElement.classList.add('tauri-macos');
+  }
 }
 
 // —— 布局常量（像素，与 viewBox 1:1）——

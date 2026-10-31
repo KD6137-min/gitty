@@ -39,14 +39,28 @@ fn read_last_repo(dir: &Path) -> Option<String> {
     list.into_iter().next()
 }
 
+/// Node 可执行文件。macOS GUI 应用从 Finder 启动时 PATH 不含 Homebrew，
+/// 直接 Command::new("node") 会失败，按 Homebrew(arm64/Intel) → 系统路径依次查找。
+fn node_binary() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+            let path = Path::new(candidate);
+            if path.is_file() {
+                return path.to_path_buf();
+            }
+        }
+    }
+    PathBuf::from("node")
+}
+
 /// 启动随附的 Node 服务；如果 4173 已经在监听则直接复用。
-/// 安装版里 server.mjs 与 public/ 作为资源放在 exe 旁边，project_root() 能找到。
-fn spawn_server(data_dir: Option<PathBuf>, last_repo: Option<String>) {
+/// 安装版里 server.mjs 与 public/ 作为资源放在 exe 旁边（macOS 为 Contents/Resources）。
+fn spawn_server(root: &Path, data_dir: Option<PathBuf>, last_repo: Option<String>) {
     if server_ready() {
         return;
     }
-    let Some(root) = project_root() else { return };
-    let mut cmd = std::process::Command::new("node");
+    let mut cmd = std::process::Command::new(node_binary());
     cmd.arg("server.mjs");
     if let Some(repo) = last_repo {
         cmd.arg(format!("--repo={repo}"));
@@ -56,9 +70,18 @@ fn spawn_server(data_dir: Option<PathBuf>, last_repo: Option<String>) {
             cmd.arg(format!("--repo={}", demo.display()));
         }
     }
-    cmd.current_dir(&root);
+    cmd.current_dir(root);
     if let Some(dir) = data_dir {
         cmd.env("GITTY_DATA_DIR", dir);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // 服务端还要调用 git；把 Homebrew 路径补进子进程 PATH
+        let path = format!(
+            "/opt/homebrew/bin:/usr/local/bin:{}",
+            std::env::var("PATH").unwrap_or_default()
+        );
+        cmd.env("PATH", path);
     }
     #[cfg(windows)]
     {
@@ -173,19 +196,77 @@ fn set_bottom(hwnd_addr: isize) {
     }
 }
 
+/// macOS：把窗口铺到主屏可用区域（NSScreen.visibleFrame，已扣掉菜单栏和 Dock）的底部。
+/// 高度沿用 BAR_HEIGHT（逻辑点），窗口 x 从 visibleFrame 左边缘开始，宽度铺满。
+#[cfg(target_os = "macos")]
+fn apply_bar_macos(window: &tauri::WebviewWindow) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSScreen, NSWindow};
+    use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(screen) = NSScreen::mainScreen(mtm) else { return };
+    let visible = screen.visibleFrame();
+    let Ok(ns_window) = window.ns_window() else { return };
+    if ns_window.is_null() || visible.size.width <= 0.0 || visible.size.height <= 0.0 {
+        return;
+    }
+
+    let height = BAR_HEIGHT.min(visible.size.height);
+    let frame = NSRect {
+        origin: NSPoint {
+            x: visible.origin.x,
+            y: visible.origin.y,
+        },
+        size: NSSize {
+            width: visible.size.width,
+            height,
+        },
+    };
+    // 桌面层级：位于所有普通窗口之下、壁纸之上，点击不会被抬到其它应用前面。
+    let level = CGWindowLevelForKey(CGWindowLevelKey::DesktopWindowLevelKey) as objc2_app_kit::NSWindowLevel;
+
+    // SAFETY: ns_window 是 Tauri 返回的有效 NSWindow 指针，且 setup 运行在主线程。
+    unsafe {
+        let ns_window = &*(ns_window as *const NSWindow);
+        ns_window.setFrame_display(frame, true);
+        ns_window.setLevel(level);
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            // macOS：附件应用，不显示 Dock 图标，也不参与 Cmd+Tab
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             // 最近仓库记录写到用户数据目录（安装目录通常不可写）
             let data_dir = app.path().app_data_dir().ok();
             if let Some(dir) = &data_dir {
                 let _ = std::fs::create_dir_all(dir);
             }
             let last_repo = data_dir.as_ref().and_then(|d| read_last_repo(d));
-            spawn_server(data_dir.clone(), last_repo);
+
+            // 开发版/Windows 安装版：server.mjs 在 exe 附近或项目根；
+            // macOS .app：server.mjs 与 public/ 打包在 Contents/Resources。
+            #[cfg(target_os = "macos")]
+            let root = project_root().or_else(|| {
+                app.path()
+                    .resource_dir()
+                    .ok()
+                    .filter(|dir| dir.join("server.mjs").exists())
+            });
+            #[cfg(not(target_os = "macos"))]
+            let root = project_root();
+            if let Some(root) = root {
+                spawn_server(&root, data_dir, last_repo);
+            }
 
             let url = WebviewUrl::External("http://localhost:4173".parse().expect("url"));
-            let window = WebviewWindowBuilder::new(app, "main", url)
+            #[allow(unused_mut)]
+            let mut builder = WebviewWindowBuilder::new(app, "main", url)
                 .title("Gitty")
                 .inner_size(1400.0, BAR_HEIGHT)
                 .decorations(false)
@@ -194,8 +275,13 @@ fn main() {
                 .maximizable(false)
                 .minimizable(false)
                 .skip_taskbar(true)
-                .shadow(false)
-                .build()?;
+                .shadow(false);
+            // macOS：启动时不抢焦点（Windows 保持原有行为）
+            #[cfg(target_os = "macos")]
+            {
+                builder = builder.focused(false);
+            }
+            let window = builder.build()?;
 
             // 贴底：由后台线程用 Win32 每秒强制定位，避免被窗口管理器覆盖
             #[cfg(windows)]
@@ -220,6 +306,22 @@ fn main() {
                         });
                     }
                 }
+            }
+
+            // macOS：原生毛玻璃 + 贴主屏底部（Dock 之上）
+            #[cfg(target_os = "macos")]
+            {
+                // HUD 材质 + Active 状态：附件应用几乎不会成为活跃窗口，
+                // 固定 Active 才能一直保持毛玻璃的鲜明效果。
+                if let Err(err) = window_vibrancy::apply_vibrancy(
+                    &window,
+                    window_vibrancy::NSVisualEffectMaterial::HudWindow,
+                    Some(window_vibrancy::NSVisualEffectState::Active),
+                    Some(16.0),
+                ) {
+                    eprintln!("apply_vibrancy failed: {err}");
+                }
+                apply_bar_macos(&window);
             }
 
             Ok(())
