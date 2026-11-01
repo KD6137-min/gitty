@@ -27,13 +27,15 @@ let orientation = qsOrient === 'v' || qsOrient === 'h'
   : (localStorage.getItem('gitty-orient') === 'v' ? 'v' : 'h');
 document.documentElement.dataset.orient = orientation;
 const isH = () => orientation === 'h';
-// 折叠已合并历史：Linux 桌面端默认开启，由顶部系统托盘菜单切换；其它平台保持完整历史
+// 隐藏已删除分支：Linux 桌面端默认开启，由顶部系统托盘菜单切换；其它平台保持完整历史
 let foldMerged = document.documentElement.classList.contains('tauri-linux')
   || new URLSearchParams(location.search).get('fold') === '1';
+const qsMode = new URLSearchParams(location.search).get('mode');
+if (qsMode === 'remote' || qsMode === 'local') document.documentElement.dataset.mode = qsMode;
 
 // —— 布局常量（像素，与 viewBox 1:1）——
 const MARGIN_TIME = 30;    // 时间轴两端留白（横：左右；竖：上下底）
-const MARGIN_LANE = 26;    // 车道轴两端留白（横：上下；竖：左右）
+const MARGIN_LANE = 44;    // 车道轴两端留白（横：上下；竖：左右）；给 tag 标签留出上方空间
 const TAIL_H = 240;        // 横版右侧名字预留
 const TAIL_TOP = 150;      // 竖版顶部（旋转名字）预留
 const TAIL_BOTTOM = 60;    // 竖版底部预留
@@ -113,6 +115,38 @@ function mergePath(p, c, blocker = null) {
   return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(e.x)} ${S(e.y)} L ${S(c.x)} ${S(c.y)}`;
 }
 
+// rebase 副本连线：直线 + 圆角折线。横版走 横-竖-横，竖版走 竖-横-竖。
+function rebaseLinkPath(a, b) {
+  const h = isH();
+  const dx = b.x - a.x, dy = b.y - a.y;
+  if (Math.abs(h ? dy : dx) < 0.5) {
+    return {
+      d: `M ${S(a.x)} ${S(a.y)} L ${S(b.x)} ${S(b.y)}`,
+      lx: h ? (a.x + b.x) / 2 : Math.max(a.x, b.x) + 10,
+      ly: h ? Math.min(a.y, b.y) - 8 : (a.y + b.y) / 2,
+      anchor: h ? 'middle' : 'start',
+    };
+  }
+  const r = Math.min(10, Math.abs(h ? dx : dy) / 2, Math.abs(h ? dy : dx) / 2);
+  const sx = Math.sign(dx) || 1, sy = Math.sign(dy) || 1;
+  if (h) {
+    const midX = (a.x + b.x) / 2;
+    return {
+      d: `M ${S(a.x)} ${S(a.y)} L ${S(midX - sx * r)} ${S(a.y)} Q ${S(midX)} ${S(a.y)} ${S(midX)} ${S(a.y + sy * r)} L ${S(midX)} ${S(b.y - sy * r)} Q ${S(midX)} ${S(b.y)} ${S(midX + sx * r)} ${S(b.y)} L ${S(b.x)} ${S(b.y)}`,
+      lx: midX + 10,
+      ly: (a.y + b.y) / 2,
+      anchor: 'start',
+    };
+  }
+  const midY = (a.y + b.y) / 2;
+  return {
+    d: `M ${S(a.x)} ${S(a.y)} L ${S(a.x)} ${S(midY - sy * r)} Q ${S(a.x)} ${S(midY)} ${S(a.x + sx * r)} ${S(midY)} L ${S(b.x - sx * r)} ${S(midY)} Q ${S(b.x)} ${S(midY)} ${S(b.x)} ${S(midY + sy * r)} L ${S(b.x)} ${S(b.y)}`,
+    lx: (a.x + b.x) / 2,
+    ly: midY - 8,
+    anchor: 'middle',
+  };
+}
+
 function layout(data, viewportW, viewportH, foldMerged = false) {
   const h = isH();
   let commits = topoSort(data.commits);
@@ -181,8 +215,8 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   const chainColorOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.color : COLORS[0]; };
   const chainKindOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.kind : 'local'; };
 
-  // 折叠已合并历史：只保留仍有当前 ref 的链，丢掉无名的历史侧链。
-  // 只影响绘制，不影响 Git 数据；切回完整视图时这些提交会重新出现。
+  // 隐藏已删除分支：只保留仍有当前 ref 的链；无名历史侧链视为分支已删除。
+  // 已合并但仍有 ref 的分支会保留；只影响绘制，不影响 Git 数据。
   if (foldMerged) {
     const keep = (commit) => {
       const ch = chainById.get(chainOf.get(commit.hash));
@@ -478,7 +512,7 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
     }
     const pts = ch.commits.map((x) => pt(x, lane));
     const tipP = pt(tipHash, lane);
-    ghostChains.push({ name: ch.name, color: ch.color, chain: ch.id, tipX: tipP.x, tipY: tipP.y, tipT: timeOf.get(tipHash) });
+    ghostChains.push({ name: ch.name, color: ch.color, chain: ch.id, tipHash, tipX: tipP.x, tipY: tipP.y, tipT: timeOf.get(tipHash) });
     remoteChains.push({
       kind: 'ghostLane', lane, color: ch.color, chain: ch.id,
       points: pts, fullPoints: pts,
@@ -573,6 +607,31 @@ function fitVerticalChips(svgW) {
   }
 }
 
+// 横版当前分支锥形标记：放在名字右侧，右半边保持菱形、左半边拉长，即竖版锥形旋转 90°
+function placeHorizontalCones() {
+  const chips = $('#chips');
+  if (!chips) return;
+  chips.querySelectorAll('.chip-cone-h').forEach((n) => n.remove());
+  for (const t of chips.querySelectorAll('text.chip.current')) {
+    if (getComputedStyle(t).display === 'none') continue;
+    let b;
+    try { b = t.getBBox(); } catch { continue; }
+    if (!b.width) continue;
+    const x0 = b.x + b.width + 8;
+    const cy = b.y + b.height / 2;
+    const halfW = 6.5, upperH = 6, lowerH = 12;
+    const xr = x0 + lowerH + upperH;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('class', 'chip-cone chip-cone-h');
+    path.setAttribute('d',
+      `M ${S(x0)} ${S(cy)} L ${S(x0 + lowerH)} ${S(cy - halfW)} L ${S(xr)} ${S(cy)} L ${S(x0 + lowerH)} ${S(cy + halfW)} Z`);
+    path.style.fill = t.style.fill || '#EDE9DE';
+    const chain = t.getAttribute('data-chain');
+    if (chain) path.setAttribute('data-chain', chain);
+    chips.appendChild(path);
+  }
+}
+
 // —— 渲染 ——
 let lastData = null;
 let lastLayout = null;
@@ -654,7 +713,42 @@ function render(data) {
   $('#rings').innerHTML = ringsHtml;
   $('#panels').innerHTML = panelHtml;
 
-  // 名字：横版在尖端右侧；竖版旋转在尖端上方
+  // rebase / cherry-pick 副本：Git 不保留旧提交到新提交的关系，用
+  // author time + 作者 + 标题 配对“同一改动、不同 hash”的提交。
+  const pointOf = new Map();
+  for (const nd of L.nodes) pointOf.set(nd.hash, { x: nd.x, y: nd.y });
+  for (const r of L.remoteRings) pointOf.set(r.hash, { x: r.x, y: r.y });
+  const copyGroups = new Map();
+  for (const c of L.commits) {
+    if (!Number.isFinite(c.authorTime) || !c.subject || !pointOf.has(c.hash)) continue;
+    const key = `${c.authorTime}\u0000${c.author}\u0000${c.email}\u0000${c.subject}`;
+    const arr = copyGroups.get(key) || [];
+    arr.push(c); copyGroups.set(key, arr);
+  }
+  const namedCommit = (c) => {
+    const ch = L.chainById.get(L.chainOf.get(c.hash));
+    return !!(ch && ch.name);
+  };
+  const rebaseHtml = [];
+  for (const arr of copyGroups.values()) {
+    if (arr.length < 2) continue;
+    arr.sort((a, b) => a.time - b.time);
+    for (let i = 0; i < arr.length - 1; i++) {
+      const a = arr[i], b = arr[i + 1];
+      // 只连“旧的无 ref 副本 → 新的有 ref 副本”，避免误连两个现存分支
+      if (namedCommit(a) || !namedCommit(b)) continue;
+      const pa = pointOf.get(a.hash), pb = pointOf.get(b.hash);
+      if (!pa || !pb) continue;
+      const link = rebaseLinkPath(pa, pb);
+      rebaseHtml.push(
+        `<path class="rebase-link" d="${link.d}"/>`
+        + `<text class="rebase-label" x="${S(link.lx)}" y="${S(link.ly)}" text-anchor="${link.anchor}">rebase</text>`
+      );
+    }
+  }
+  $('#rebaseLinks').innerHTML = rebaseHtml.join('');
+
+  // 名字：横版在尖端右侧；竖版在尖端上方
   const chips = [];
   const drawn = new Set();
   // 竖版按每个 / 分行；横版仍然用 / 连回一整行
@@ -663,8 +757,8 @@ function render(data) {
     const cls = `chip${extraCls}${dim(chainId)}`;
     if (isH()) {
       const text = lines.filter(Boolean).join('/');
-      const curMark = current ? '<tspan class="chip-head" dx="10" dy="3">◆</tspan>' : '';
-      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}${curMark}</text>`;
+      // 横版当前分支的锥形标记在渲染后按文本宽度放置（placeHorizontalCones）
+      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 22)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
     }
     const rows = lines.map((part, i) => (i === 0 ? part : '/' + part));
     const topBaseline = y - 16 - Math.max(0, rows.length - 1) * 28;
@@ -695,10 +789,11 @@ function render(data) {
     if (lane === undefined || drawn.has(lane + ':' + t)) continue;
     drawn.add(lane + ':' + t);
     const st = L.stats.find((s) => s.head.name === head.name);
-    const isCur = head.name === L.current;
     const p = L.pt(head.hash);
     const aliasHeads = L.locals.filter((l) => L.laneOf.get(l.hash) === lane && L.timeOf.get(l.hash) === t && l.name !== head.name);
     const aliases = aliasHeads.map((l) => l.name);
+    // 当前分支可能是同一尖端上的别名（如 main · dev），也要标在当前 chip 上
+    const isCur = head.name === L.current || aliases.includes(L.current);
     const aliasTxt = aliases.length ? `<tspan class="chip-count" dx="7">· ${esc(aliases.join(' · '))}</tspan>` : '';
     const color = L.chainColorOf(head.hash);
     const chainId = L.chainOf.get(head.hash);
@@ -707,29 +802,48 @@ function render(data) {
       ? (isH() ? Math.max(t, st.upT) : Math.min(t, st.upT))
       : t;
     const lp = isH() ? { x: labelT, y: p.y } : { x: p.x, y: labelT };
+    // 竖版让位：玻璃带顶边会压住名字；尖端有 tag 时也要给 tag 名留出上方空间
+    if (!isH()) {
+      const panelPad = st && st.inWindow && (st.ahead > 0 || st.behind > 0);
+      const tagPad = tagByHash.has(head.hash);
+      lp.y -= panelPad || tagPad ? 12 : 0;
+    }
     const localCls = ' chip-local' + (isCur ? ' current' : '');
     chips.push(chipText(lp.x, lp.y, splitName(head.name), color, chainId, localCls, aliasTxt, isCur));
-    // 同一尖端的多个本地分支（如 main / dev）各自有 upstream：
-    // 远端标签要把它们都带上，否则 origin/dev 会因为去重而消失。
-    const upNames = [];
-    if (st && st.upstream) upNames.push(st.upstream);
-    for (const a of aliasHeads) {
-      const ast = L.stats.find((s) => s.head.name === a.name);
-      if (ast && ast.upstream && !upNames.includes(ast.upstream)) upNames.push(ast.upstream);
-    }
-    const upStat = (st && st.inWindow ? st : null)
-      || aliasHeads.map((a) => L.stats.find((s) => s.head.name === a.name)).find((s) => s && s.inWindow)
-      || null;
-    if (upNames.length && upStat && upStat.upT != null) {
-      const upPoint = isH() ? { x: upStat.upT, y: p.y } : { x: p.x, y: upStat.upT };
-      const remoteAlias = upNames.length > 1
-        ? `<tspan class="chip-count" dx="7">· ${esc(upNames.slice(1).join(' · '))}</tspan>`
-        : '';
-      chips.push(chipText(upPoint.x, upPoint.y, splitName(upNames[0]), color, chainId, ' chip-remote', remoteAlias));
-    }
+  }
+  // 远端视角按远端 tip 分组：origin/main · origin/dev 指向同一个提交时应落在同一点，
+  // 不能各自挂到对应本地分支的车道上（否则 origin/dev 会跑到 dev 的红色车道上）。
+  const ghostNames = new Set(L.ghostChains.map((g) => g.name));
+  const remoteRank = (name) => {
+    const short = name.replace(/^[^/]+\//, '');
+    if (short === 'main' || short === 'master') return 0;
+    if (short === 'dev' || short === 'develop') return 1;
+    return 2;
+  };
+  const remoteGroups = new Map();
+  for (const r of data.refs) {
+    if (r.kind !== 'remote' || /\/HEAD$/.test(r.name)) continue;
+    if (ghostNames.has(r.name)) continue; // 纯远端分支由 chip-ghost 标
+    if (!L.laneOf.has(r.hash)) continue;
+    const arr = remoteGroups.get(r.hash) || [];
+    arr.push(r.name);
+    remoteGroups.set(r.hash, arr);
+  }
+  for (const [hash, names] of remoteGroups) {
+    names.sort((a, b) => remoteRank(a) - remoteRank(b) || a.localeCompare(b));
+    const [first, ...rest] = names;
+    const p = L.pt(hash);
+    const padY = !isH() && tagByHash.has(hash) ? 12 : 0;
+    const color = L.chainColorOf(hash);
+    const chainId = L.chainOf.get(hash);
+    const remoteAlias = rest.length
+      ? `<tspan class="chip-count" dx="7">· ${esc(rest.join(' · '))}</tspan>`
+      : '';
+    chips.push(chipText(p.x, p.y - padY, splitName(first), color, chainId, ' chip-remote', remoteAlias));
   }
   for (const g of L.ghostChains) {
-    chips.push(chipText(g.tipX, g.tipY, splitName(g.name), g.color, g.chain, ' chip-ghost'));
+    const padY = !isH() && g.tipHash && tagByHash.has(g.tipHash) ? 12 : 0;
+    chips.push(chipText(g.tipX, g.tipY - padY, splitName(g.name), g.color, g.chain, ' chip-ghost'));
   }
   // tag：三角 + 名称
   for (const [hash, names] of tagByHash) {
@@ -737,14 +851,20 @@ function render(data) {
     const p = L.pt(hash);
     const label = names.join(', ');
     const cls = dim(L.chainOf.get(hash));
-    chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 4.5)},${S(p.y - 20)} ${S(p.x + 4.5)},${S(p.y - 20)} ${S(p.x)},${S(p.y - 13.5)}" style="fill:var(--ink)"/>`);
+    // 标签放在三角上方，并做边缘夹取，避免被 SVG 左右裁掉
+    const labelW = label.length * 7;
+    const minX = 4 + labelW / 2;
+    const maxX = L.svgW - 4 - labelW / 2;
     if (isH()) {
-      const anchorEnd = L.svgW - p.x < label.length * 7 + 22;
-      const tx = anchorEnd ? p.x - 9 : p.x + 9;
-      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 13)}" text-anchor="${anchorEnd ? 'end' : 'start'}">${esc(label)}</text>`);
+      // 横版：三角在提交点上方，vX.X.X 在三角上方
+      chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 4.5)},${S(p.y - 20)} ${S(p.x + 4.5)},${S(p.y - 20)} ${S(p.x)},${S(p.y - 13.5)}" style="fill:var(--ink)"/>`);
+      const tx = clamp(p.x, minX, maxX);
+      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 26)}" text-anchor="middle">${esc(label)}</text>`);
     } else {
-      // 竖版分支名已经改成水平分行，tag 名也保持水平，放在提交点右侧
-      chips.push(`<text class="tag-name${cls}" x="${S(p.x + 12)}" y="${S(p.y + 4)}">${esc(label)}</text>`);
+      // 竖版：三角在提交点左侧，vX.X.X 在三角上方
+      chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 20)},${S(p.y - 4.5)} ${S(p.x - 20)},${S(p.y + 4.5)} ${S(p.x - 13.5)},${S(p.y)}" style="fill:var(--ink)"/>`);
+      const tx = clamp(p.x - 16.75, minX, maxX);
+      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 9)}" text-anchor="middle">${esc(label)}</text>`);
     }
   }
   // 聚焦：汇入分支的最后一条汇入线起点标名
@@ -763,6 +883,7 @@ function render(data) {
   }
   $('#chips').innerHTML = chips.join('');
   if (!isH()) fitVerticalChips(L.svgW);
+  else placeHorizontalCones();
 
   const tagsAt = (hash) => (tagByHash.get(hash) || []).join(', ');
   const hits = [];
@@ -770,7 +891,7 @@ function render(data) {
   for (const ch of L.remoteChains) for (const d of ch.hits) hits.push(hitEl(d.x, d.y, d, '远端独有', ch.chain, tagsAt(d.hash)));
   $('#hits').innerHTML = hits.join('');
 
-  // 折叠时被隐藏的提交也记为已见，切回完整历史时不会误报“新提交”
+  // 被隐藏的已删除分支提交也记为已见，切回完整历史时不会误报“新提交”
   for (const c of data.commits) seen.add(c.hash);
 
   updateTimeline(L, W, H);
@@ -1262,7 +1383,7 @@ function placeTimeline() {
 function setFold(next) {
   foldMerged = !!next;
   if (lastData) render(lastData);
-  showNotice(foldMerged ? '已折叠已合并历史' : '已展开完整历史');
+  showNotice(foldMerged ? '已隐藏已删除分支' : '已显示已删除分支');
 }
 // 供 Linux 托盘菜单通过 eval 调用
 window.__gittySetFold = setFold;
@@ -1355,7 +1476,7 @@ if (isTauri && (orientation === 'v' || isLinuxTauri)) {
   const inv = api && (api.core?.invoke || api.invoke);
   if (inv) inv('set_orientation', { orientation }).catch(() => {});
 }
-// 同步系统托盘里的“隐藏已合并历史”勾选状态
+// 同步系统托盘里的“隐藏已删除分支”勾选状态
 if (isTauri && isLinuxTauri) {
   const api = window.__TAURI__;
   const inv = api && (api.core?.invoke || api.invoke);

@@ -7,6 +7,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+// 雷达窗口：取所有 refs 里最新的 N 个提交。150 条兼顾桌面雷达性能与前端布局/SVG 体积。
+const COMMIT_LIMIT = 150;
 let root = resolve(process.argv.find((arg) => arg.startsWith('--repo='))?.slice(7) || process.cwd());
 const publicDir = join(import.meta.dirname, 'public');
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -75,13 +77,22 @@ function parseStatus(raw) {
 
 async function graph() {
   try {
-    // 整个 DAG（本地 + 远端引用可达的提交），最新在前，窗口 160 条。
+    // 整个 DAG（本地 + 远端引用可达的提交），最新在前，窗口 150 条。
     // 客户端自行做车道分配、ahead/behind、影子链 —— 服务端只需几次 git 调用。
-    const raw = await git(['log', '--exclude=refs/stash', '--all', '--max-count=160', '--format=%x1e%H%x1f%P%x1f%ct%x1f%s']);
+    // at/an/ae 用于识别 rebase / cherry-pick 的“同一改动、不同 hash”副本。
+    const raw = await git(['log', '--exclude=refs/stash', '--all', `--max-count=${COMMIT_LIMIT}`, '--format=%x1e%H%x1f%P%x1f%ct%x1f%at%x1f%an%x1f%ae%x1f%s']);
     const commits = raw
       ? raw.split('\x1e').filter(Boolean).map((row) => {
-          const [hash, parentText, time, subject] = row.split('\x1f');
-          return { hash, parents: parentText ? parentText.split(' ') : [], time: Number(time), subject: (subject || '').trim() };
+          const [hash, parentText, time, authorTime, author, email, subject] = row.split('\x1f');
+          return {
+            hash,
+            parents: parentText ? parentText.split(' ') : [],
+            time: Number(time),
+            authorTime: Number(authorTime),
+            author: (author || '').trim(),
+            email: (email || '').trim(),
+            subject: (subject || '').trim(),
+          };
         })
       : [];
     // 完整 refname 判定本地/远端 —— 本地分支名本身可能含 "/"（如 feature/visual-graph）

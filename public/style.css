@@ -59,6 +59,8 @@ header[data-tauri-drag-region] { cursor: grab; }
 header[data-tauri-drag-region]:active { cursor: grabbing; }
 .h-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .h-right { display: flex; align-items: center; gap: 14px; justify-self: end; min-width: 0; }
+/* 横版保持原来的流式布局；竖版把按钮组包成一个可均匀铺开的容器，状态点单独靠右 */
+.h-controls { display: contents; }
 .brand { display: flex; align-items: center; gap: 11px; font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; font-weight: 700; letter-spacing: .16em; font-size: 20px; color: var(--ink); }
 .brand-mark { width: 14px; height: 14px; background: var(--red); display: block; transform: rotate(45deg); }
 .repo-wrap { position: relative; flex: 0 1 280px; min-width: 0; max-width: 280px; }
@@ -102,11 +104,11 @@ html[data-orient="h"] .repo-list { max-height: 110px; }
 .tool-btn.busy { opacity: .5; pointer-events: none; }
 /* 横版：FETCH / AUTO 合成一个胶囊，中间留一条小缝；两半等宽 */
 .fetch-group { display: contents; }
-html[data-orient="h"] .fetch-group { display: inline-flex; align-items: center; gap: 2px; }
+html[data-orient="h"] .fetch-group { display: inline-flex; align-items: stretch; height: 34px; gap: 2px; }
 html[data-orient="h"] .fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
 html[data-orient="h"] .fetch-group #auto { border-radius: 3px 999px 999px 3px; }
 html[data-orient="h"] .fetch-group #fetch,
-html[data-orient="h"] .fetch-group #auto { width: 60px; padding-left: 0; padding-right: 0; text-align: center; white-space: nowrap; }
+html[data-orient="h"] .fetch-group #auto { width: 60px; height: 100%; padding: 0; display: flex; align-items: center; justify-content: center; text-align: center; white-space: nowrap; }
 /* 工作区状态：已暂存 / 未暂存 / 未跟踪 */
 .wt { flex: none; display: flex; align-items: center; gap: 7px; padding: 3px 9px; border: 1px solid var(--hair); border-radius: 999px; background: rgba(255, 255, 255, .06); font: 600 11px ui-monospace, Consolas, monospace; color: var(--ink); white-space: nowrap; }
 .wt .s { color: #6D9BFF; }
@@ -134,12 +136,20 @@ html.tauri[data-orient="v"] .radar { width: 100%; }
 html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
 html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
 html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
-html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: center; flex-wrap: wrap; gap: 6px; }
+html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: space-between; flex-wrap: nowrap; gap: 6px; }
+html[data-orient="v"] .h-controls { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; justify-content: space-evenly; flex-wrap: wrap; gap: 6px; }
 html[data-orient="v"] .shortcuts { display: none; }
-html[data-orient="v"] .mode-toggle { width: 88px; height: 30px; }
+html[data-orient="v"] .mode-toggle { width: 122px; height: 30px; }
+html[data-orient="v"] #orient { width: 122px; }
 html[data-orient="v"] .mode-toggle button { font-size: 13px; letter-spacing: .04em; }
 /* 竖版：按钮行居中并适当放大，状态点跟着一起居中 */
-html[data-orient="v"] .tool-btn { font-size: 13px; padding: 7px 10px; }
+html[data-orient="v"] .tool-btn { font-size: 13px; height: 30px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; }
+/* 竖版：FETCH/AUTO 保持一个胶囊（一项），高度与本地/远端一致 */
+html[data-orient="v"] .fetch-group { display: inline-flex; align-items: stretch; height: 30px; gap: 2px; }
+html[data-orient="v"] .fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
+html[data-orient="v"] .fetch-group #auto { border-radius: 3px 999px 999px 3px; }
+html[data-orient="v"] .fetch-group #fetch,
+html[data-orient="v"] .fetch-group #auto { width: 60px; height: 100%; padding: 0; display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 html[data-orient="v"] .graph { min-height: 0; }
 html[data-orient="v"] .scroll { right: 26px; }
 html[data-orient="v"] .timeline {
@@ -166,7 +176,7 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 
 /* 视角切换：玻璃胶囊 + 滑动亮色药丸（放在顶栏最右） */
 .mode-toggle {
-  position: relative; flex: none; display: flex; width: 150px; height: 34px; padding: 2px;
+  position: relative; flex: none; display: flex; width: 122px; height: 34px; padding: 2px;
   border: 1px solid var(--hair); border-radius: 999px;
   background: rgba(255, 255, 255, .06);
   -webkit-backdrop-filter: blur(10px);
@@ -187,9 +197,21 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 .mode-toggle[data-active="local"] button[data-mode="local"],
 .mode-toggle[data-active="remote"] button[data-mode="remote"] { color: #141412; }
 .mode-toggle button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 999px; }
+/* 本地/远端、横/竖分段统一成 FETCH/AUTO 同款双半胶囊 */
+.mode-toggle { padding: 0; gap: 2px; border: 0; border-radius: 0; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.mode-toggle .pill { display: none; }
+.mode-toggle button {
+  height: 100%; border: 1px solid var(--hair); background: rgba(255, 255, 255, .06);
+  border-radius: 0; color: #C5C1B6;
+  transition: background .3s ease, color .3s ease;
+}
+.mode-toggle button:first-of-type { border-radius: 999px 3px 3px 999px; }
+.mode-toggle button:last-of-type { border-radius: 3px 999px 999px 3px; }
+.mode-toggle button.on { background: var(--ink); color: #141412; }
+.mode-toggle button:not(.on):hover { background: rgba(255, 255, 255, .13); }
 /* 横版：细调一点视觉重心，并把「横 / 竖」做成同款分段开关 */
 html[data-orient="h"] .mode-toggle { top: 1px; }
-.orient-toggle { display: none; width: 100px; }
+.orient-toggle { display: none; width: 122px; }
 html[data-orient="h"] .orient-toggle { display: flex; }
 html[data-orient="h"] #orient { display: none; }
 .orient-toggle[data-active="v"] .pill { transform: translateX(100%); }
@@ -281,17 +303,21 @@ html[data-mode="remote"] .front-remote .remote-line { stroke-width: 2.4; stroke-
 /* 玻璃带：明显一点，但仍是一层雾 */
 .glass { fill: rgba(255, 255, 255, .10); stroke: rgba(255, 255, 255, .22); stroke-width: 1; }
 
+/* rebase / cherry-pick 副本的虚线注释 */
+.rebase-links { pointer-events: none; transition: opacity .5s ease, filter .5s ease; }
+.rebase-link { fill: none; stroke: rgba(237, 233, 222, .38); stroke-width: 1; stroke-dasharray: 2 5; }
+.rebase-label { font: 500 10px ui-monospace, Consolas, monospace; fill: var(--muted); letter-spacing: .06em; paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 3px; stroke-linejoin: round; }
+html[data-mode="remote"] .rebase-links { opacity: .35; filter: url(#gitty-blur-soft); }
+
 /* 名字：不参与模糊 */
 .chips { pointer-events: none; }
 .chip { pointer-events: auto; cursor: pointer; font: 600 19px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 4px; stroke-linejoin: round; }
 .chip.current { font-weight: 700; }
-/* 竖版当前分支的锥形标记：上半部保持菱形，下半部拉长指向名字 */
+/* 当前分支锥形标记：竖版上半部保持菱形、下半部拉长；横版旋转后右侧不变、左侧拉长 */
 .chip-cone { pointer-events: auto; cursor: pointer; }
-.chip-head { font-size: 24px; }
 /* 竖版：水平两行的分支名 */
 .chip-v { font-size: 19px; stroke-width: 4px; }
 .chip-v .chip-count { font-size: 14px; }
-.chip-v .chip-head { font-size: 24px; }
 .chip-count { font: 500 14px ui-monospace, Consolas, monospace; fill: var(--muted); }
 .chip-remote { display: none; }
 .chip-remote.muted { opacity: .45; }

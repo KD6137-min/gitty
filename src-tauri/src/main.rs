@@ -584,7 +584,8 @@ fn save_edges(window: &tauri::WebviewWindow, h_edge: &str, v_edge: &str) {
     let _ = std::fs::write(path, format!("{h_edge} {v_edge}"));
 }
 
-/// “折叠已合并历史”状态（系统托盘和前端共用），存在应用数据目录，默认折叠。
+/// “隐藏已删除分支”状态（系统托盘和前端共用），存在应用数据目录，默认隐藏。
+/// Git 不保存分支删除记录，这里用“当前没有 ref 的链”来代表已删除分支。
 fn fold_file(app: &tauri::AppHandle) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
@@ -917,7 +918,7 @@ fn setup_linux_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::tray::TrayIconBuilder;
 
     let folded = read_fold(app);
-    let history = CheckMenuItemBuilder::with_id("history", "隐藏已合并历史")
+    let history = CheckMenuItemBuilder::with_id("hide-deleted", "隐藏已删除分支")
         .checked(folded)
         .build(app)?;
     let menu = MenuBuilder::new(app)
@@ -960,7 +961,7 @@ fn setup_linux_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     ));
                 }
             }
-            "history" => {
+            "history" | "hide-deleted" => {
                 let next = !fold_state.load(Ordering::SeqCst);
                 fold_state.store(next, Ordering::SeqCst);
                 let _ = history_item.set_checked(next);
