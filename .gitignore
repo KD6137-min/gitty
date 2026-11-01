@@ -14,5 +14,8 @@ build.log
 # 演示仓库由 scripts/build-demo.sh 生成，不纳入版本库
 demo/
 
+# Linux 随包 Node sidecar（由 scripts/fetch-node.sh 下载，不提交二进制）
+src-tauri/binaries/
+
 # 旧版本备份
 .backup-*/

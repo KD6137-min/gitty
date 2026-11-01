@@ -62,6 +62,15 @@ npm install
 npm run tauri:dev
 ```
 
+Linux release 打包前会额外拉取随包 Node 运行时（不提交到仓库，约 100MB）：
+
+```bash
+bash scripts/fetch-node.sh
+npm run tauri:build -- --bundles deb
+```
+
+安装包会自带 `gitty-node` sidecar，优先于系统 Node；开发模式仍使用系统 `node`。
+
 ## 浏览器版
 
 ```powershell

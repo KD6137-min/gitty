@@ -93,6 +93,29 @@ fn node_binary() -> PathBuf {
     PathBuf::from("node")
 }
 
+/// Linux release 包里的 Node sidecar。开发/未打包时返回 None，回退到系统 node。
+/// Tauri 会把 externalBin 安装到可执行文件旁或资源目录；两处都查。
+#[cfg(target_os = "linux")]
+fn sidecar_node(root: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![
+        root.join("gitty-node"),
+        root.join("gitty-node-x86_64-unknown-linux-gnu"),
+        root.join("gitty-node-aarch64-unknown-linux-gnu"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("gitty-node"));
+            candidates.push(dir.join("gitty-node-x86_64-unknown-linux-gnu"));
+            candidates.push(dir.join("gitty-node-aarch64-unknown-linux-gnu"));
+            if let Some(prefix) = dir.parent() {
+                candidates.push(prefix.join("lib/Gitty/gitty-node"));
+                candidates.push(prefix.join("lib/gitty/gitty-node"));
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
 /// 启动随附的 Node 服务；如果 4173 已经在监听则直接复用。
 /// 安装版里 server.mjs 与 public/ 作为资源放在 exe 旁边（macOS 为 Contents/Resources）。
 fn spawn_server(
@@ -103,7 +126,16 @@ fn spawn_server(
     if server_ready() {
         return None;
     }
-    let mut cmd = std::process::Command::new(node_binary());
+    let mut cmd = std::process::Command::new({
+        #[cfg(target_os = "linux")]
+        {
+            sidecar_node(root).unwrap_or_else(node_binary)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            node_binary()
+        }
+    });
     cmd.arg("server.mjs");
     if let Some(repo) = last_repo {
         cmd.arg(format!("--repo={repo}"));
@@ -649,6 +681,10 @@ fn set_geometry_linux(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: 
         RawWindowHandle::Xcb(h) => h.window.get(),
         _ => return,
     };
+    // 同时走 GTK 的 resize，更新窗口默认尺寸，避免首次 map 后 GTK 又按
+    // builder 的 inner_size(1400) 把宽度重置回去；X11 configure 负责最终几何。
+    let _ = window.set_size(tauri::PhysicalSize::new(w.max(1), h.max(1)));
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     if let Ok((conn, _)) = x11rb::connect(None) {
         let _ = conn.delete_property(xid, AtomEnum::WM_NORMAL_HINTS.into());
         let _ = conn.configure_window(
@@ -1112,6 +1148,16 @@ fn main() {
                 // 有的 WM 在首次 map 后才应用尺寸，显示后再定位一次
                 place_linux_saved(&window, false);
                 lower_linux(&window);
+                // 首次 map 后 GTK/WebKit 可能又把窗口恢复成初始 1400 宽；延迟再校正一次
+                let adjust = window.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(1200));
+                    let win = adjust.clone();
+                    let _ = adjust.run_on_main_thread(move || {
+                        let vertical = LINUX_VERTICAL.load(Ordering::SeqCst);
+                        place_linux_current(&win, vertical);
+                    });
+                });
                 // 获得焦点后延迟沉回底部；拖动结束后吸附到窗口中心所在的显示器
                 let event_window = window.clone();
                 window.on_window_event(move |event| match event {
