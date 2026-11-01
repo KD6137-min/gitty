@@ -15,6 +15,8 @@ if (isTauri) {
   document.documentElement.classList.add('tauri');
   // macOS vibrancy 视图圆角为 16，页面叠加层同步圆角，避免四角露出深色方块
   if (/Macintosh/.test(navigator.userAgent)) document.documentElement.classList.add('tauri-macos');
+  // Linux/X11 没有系统级背景模糊：只加深暗色叠加，内层虚焦语义不变
+  else if (/Linux/.test(navigator.userAgent)) document.documentElement.classList.add('tauri-linux');
 }
 // Tauri 内置资源来源需要显式指向本地 Node 服务；浏览器里用同源
 const API = isTauri ? 'http://localhost:4173' : '';
@@ -25,6 +27,9 @@ let orientation = qsOrient === 'v' || qsOrient === 'h'
   : (localStorage.getItem('gitty-orient') === 'v' ? 'v' : 'h');
 document.documentElement.dataset.orient = orientation;
 const isH = () => orientation === 'h';
+// 折叠已合并历史：Linux 桌面端默认开启，由顶部系统托盘菜单切换；其它平台保持完整历史
+let foldMerged = document.documentElement.classList.contains('tauri-linux')
+  || new URLSearchParams(location.search).get('fold') === '1';
 
 // —— 布局常量（像素，与 viewBox 1:1）——
 const MARGIN_TIME = 30;    // 时间轴两端留白（横：左右；竖：上下底）
@@ -108,12 +113,12 @@ function mergePath(p, c, blocker = null) {
   return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(e.x)} ${S(e.y)} L ${S(c.x)} ${S(c.y)}`;
 }
 
-function layout(data, viewportW, viewportH) {
+function layout(data, viewportW, viewportH, foldMerged = false) {
   const h = isH();
-  const commits = topoSort(data.commits);
-  const byHash = new Map(commits.map((c) => [c.hash, c]));
-  const inWin = new Set(commits.map((c) => c.hash));
-  const childrenOf = new Map();
+  let commits = topoSort(data.commits);
+  let byHash = new Map(commits.map((c) => [c.hash, c]));
+  let inWin = new Set(commits.map((c) => c.hash));
+  let childrenOf = new Map();
   for (const c of commits) for (const p of c.parents) if (inWin.has(p)) {
     const list = childrenOf.get(p) || []; list.push(c); childrenOf.set(p, list);
   }
@@ -175,6 +180,23 @@ function layout(data, viewportW, viewportH) {
   }
   const chainColorOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.color : COLORS[0]; };
   const chainKindOf = (hash) => { const ch = chainById.get(chainOf.get(hash)); return ch ? ch.kind : 'local'; };
+
+  // 折叠已合并历史：只保留仍有当前 ref 的链，丢掉无名的历史侧链。
+  // 只影响绘制，不影响 Git 数据；切回完整视图时这些提交会重新出现。
+  if (foldMerged) {
+    const keep = (commit) => {
+      const ch = chainById.get(chainOf.get(commit.hash));
+      return !!(ch && ch.name);
+    };
+    commits = commits.filter(keep);
+    byHash = new Map(commits.map((c) => [c.hash, c]));
+    inWin = new Set(commits.map((c) => c.hash));
+    childrenOf = new Map();
+    for (const c of commits) for (const p of c.parents) if (inWin.has(p)) {
+      const list = childrenOf.get(p) || []; list.push(c); childrenOf.set(p, list);
+    }
+    for (const ch of chains) ch.commits = ch.commits.filter((hash) => byHash.has(hash));
+  }
 
   // —— 时间轴 ——
   const n = commits.length;
@@ -522,7 +544,7 @@ function fitVerticalChips(svgW) {
   if (!svgW) return;
   const margin = 3, gap = 6;
   const items = [];
-  for (const t of document.querySelectorAll('#chips text.chip-v')) {
+  for (const t of document.querySelectorAll('#chips g.chip-v')) {
     if (getComputedStyle(t).display === 'none') continue;
     t.removeAttribute('transform');
     const b = t.getBBox();
@@ -555,38 +577,32 @@ function fitVerticalChips(svgW) {
 let lastData = null;
 let lastLayout = null;
 let knownChains = new Set();
+let lastRevision = null;
+let lastRepo = null;
 
 function render(data) {
   lastData = data;
   const scroll = $('#scroll');
   const W = scroll.clientWidth || Math.max(window.innerWidth, 400);
   const H = scroll.clientHeight || 200;
-  const L = layout(data, W, H);
+  const L = layout(data, W, H, foldMerged);
   lastLayout = L;
 
   $('#repo-label').textContent = shortRepo(data.repo);
   $('#repo').title = `${data.repo.replace(/\\/g, '/')}\n点击切换仓库`;
   $('#repo').classList.remove('needs-repo');
 
-  const wt = data.status || { staged: 0, unstaged: 0, untracked: 0 };
-  const wtEl = $('#wt');
-  const wtParts = [];
-  if (wt.staged) wtParts.push(`<span class="s">●${wt.staged}</span>`);
-  if (wt.unstaged) wtParts.push(`<span class="u">●${wt.unstaged}</span>`);
-  if (wt.untracked) wtParts.push(`<span class="n">●${wt.untracked}</span>`);
-  if (wtParts.length) {
-    wtEl.innerHTML = wtParts.join('');
-    wtEl.title = `已暂存 ${wt.staged} · 未暂存 ${wt.unstaged} · 未跟踪 ${wt.untracked}`;
-    wtEl.hidden = false;
-  } else wtEl.hidden = true;
+  updateWt(data);
 
   if (!L.commits.length) {
     $('#empty').hidden = false;
     $('#empty').innerHTML = '<div class="empty-title">这个仓库还没有提交</div><div class="empty-hint">提交之后分支雷达会自动出现</div>';
     $('#graph').hidden = true;
+    $('#timeline').hidden = true;
     return;
   }
   $('#empty').hidden = true; $('#graph').hidden = false;
+  $('#timeline').hidden = false;
 
   if (firstLoad) {
     for (const nd of L.nodes) nd.isNew = false;
@@ -643,22 +659,35 @@ function render(data) {
   const drawn = new Set();
   // 竖版按每个 / 分行；横版仍然用 / 连回一整行
   const splitName = (name) => String(name).split('/').filter(Boolean);
-  const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '') => {
+  const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '', current = false) => {
     const cls = `chip${extraCls}${dim(chainId)}`;
     if (isH()) {
       const text = lines.filter(Boolean).join('/');
-      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
+      const curMark = current ? '<tspan class="chip-head" dx="10" dy="3">◆</tspan>' : '';
+      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 16)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}${curMark}</text>`;
     }
     const rows = lines.map((part, i) => (i === 0 ? part : '/' + part));
+    const topBaseline = y - 16 - Math.max(0, rows.length - 1) * 28;
+    let textEl;
     if (rows.length <= 1) {
-      return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 16)}" text-anchor="middle" style="fill:${color}">${esc(rows[0] || '')}${extraHtml}</text>`;
+      textEl = `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 16)}" text-anchor="middle" style="fill:${color}">${esc(rows[0] || '')}${extraHtml}</text>`;
+    } else {
+      // 有几个 / 就分几行：第一行只留前缀，后续每行以 / 开头
+      const spans = rows.map((row, i) => {
+        const baseline = y - 16 - (rows.length - 1 - i) * 28;
+        return `<tspan x="${S(x)}" y="${S(baseline)}">${esc(row)}${i === rows.length - 1 ? extraHtml : ''}</tspan>`;
+      }).join('');
+      textEl = `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}">${spans}</text>`;
     }
-    // 有几个 / 就分几行：第一行只留前缀，后续每行以 / 开头
-    const spans = rows.map((row, i) => {
-      const baseline = y - 16 - (rows.length - 1 - i) * 28;
-      return `<tspan x="${S(x)}" y="${S(baseline)}">${esc(row)}${i === rows.length - 1 ? extraHtml : ''}</tspan>`;
-    }).join('');
-    return `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}">${spans}</text>`;
+    // 竖版当前分支：锥形标记在名字正上方。上半部保持菱形，下半部拉长指向名字。
+    const cone = current ? (() => {
+      const tip = topBaseline - 17;
+      const side = tip - 12;
+      const top = side - 6;
+      const hw = 6.5;
+      return `<path class="chip-cone" d="M ${S(x)} ${S(top)} L ${S(x + hw)} ${S(side)} L ${S(x)} ${S(tip)} L ${S(x - hw)} ${S(side)} Z" style="fill:${color}"/>`;
+    })() : '';
+    return `<g class="chip-v${extraCls}${dim(chainId)}" data-chain="${esc(chainId)}">${cone}${textEl}</g>`;
   };
   for (const head of L.locals) {
     const lane = L.laneOf.get(head.hash);
@@ -668,21 +697,35 @@ function render(data) {
     const st = L.stats.find((s) => s.head.name === head.name);
     const isCur = head.name === L.current;
     const p = L.pt(head.hash);
-    const aliases = L.locals.filter((l) => L.laneOf.get(l.hash) === lane && L.timeOf.get(l.hash) === t && l.name !== head.name).map((l) => l.name);
+    const aliasHeads = L.locals.filter((l) => L.laneOf.get(l.hash) === lane && L.timeOf.get(l.hash) === t && l.name !== head.name);
+    const aliases = aliasHeads.map((l) => l.name);
     const aliasTxt = aliases.length ? `<tspan class="chip-count" dx="7">· ${esc(aliases.join(' · '))}</tspan>` : '';
     const color = L.chainColorOf(head.hash);
     const chainId = L.chainOf.get(head.hash);
-    const curMark = isCur ? '<tspan class="chip-head" dx="10" dy="3">◆</tspan>' : '';
     // 分叉时远端尖端可能更靠“新”一侧，名字放到两者之后，避免盖住远端提交
     const labelT = st && st.inWindow && st.upT != null
       ? (isH() ? Math.max(t, st.upT) : Math.min(t, st.upT))
       : t;
     const lp = isH() ? { x: labelT, y: p.y } : { x: p.x, y: labelT };
     const localCls = ' chip-local' + (isCur ? ' current' : '');
-    chips.push(chipText(lp.x, lp.y, splitName(head.name), color, chainId, localCls, `${aliasTxt}${curMark}`));
-    if (st && st.upstream) {
-      const upPoint = isH() ? { x: st.upT, y: p.y } : { x: p.x, y: st.upT };
-      chips.push(chipText(upPoint.x, upPoint.y, splitName(st.upstream), color, chainId, ' chip-remote', ''));
+    chips.push(chipText(lp.x, lp.y, splitName(head.name), color, chainId, localCls, aliasTxt, isCur));
+    // 同一尖端的多个本地分支（如 main / dev）各自有 upstream：
+    // 远端标签要把它们都带上，否则 origin/dev 会因为去重而消失。
+    const upNames = [];
+    if (st && st.upstream) upNames.push(st.upstream);
+    for (const a of aliasHeads) {
+      const ast = L.stats.find((s) => s.head.name === a.name);
+      if (ast && ast.upstream && !upNames.includes(ast.upstream)) upNames.push(ast.upstream);
+    }
+    const upStat = (st && st.inWindow ? st : null)
+      || aliasHeads.map((a) => L.stats.find((s) => s.head.name === a.name)).find((s) => s && s.inWindow)
+      || null;
+    if (upNames.length && upStat && upStat.upT != null) {
+      const upPoint = isH() ? { x: upStat.upT, y: p.y } : { x: p.x, y: upStat.upT };
+      const remoteAlias = upNames.length > 1
+        ? `<tspan class="chip-count" dx="7">· ${esc(upNames.slice(1).join(' · '))}</tspan>`
+        : '';
+      chips.push(chipText(upPoint.x, upPoint.y, splitName(upNames[0]), color, chainId, ' chip-remote', remoteAlias));
     }
   }
   for (const g of L.ghostChains) {
@@ -700,7 +743,8 @@ function render(data) {
       const tx = anchorEnd ? p.x - 9 : p.x + 9;
       chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 13)}" text-anchor="${anchorEnd ? 'end' : 'start'}">${esc(label)}</text>`);
     } else {
-      chips.push(`<text class="tag-name${cls}" x="${S(p.x + 16)}" y="${S(p.y - 24)}" transform="rotate(-90 ${S(p.x + 16)} ${S(p.y - 24)})">${esc(label)}</text>`);
+      // 竖版分支名已经改成水平分行，tag 名也保持水平，放在提交点右侧
+      chips.push(`<text class="tag-name${cls}" x="${S(p.x + 12)}" y="${S(p.y + 4)}">${esc(label)}</text>`);
     }
   }
   // 聚焦：汇入分支的最后一条汇入线起点标名
@@ -726,6 +770,9 @@ function render(data) {
   for (const ch of L.remoteChains) for (const d of ch.hits) hits.push(hitEl(d.x, d.y, d, '远端独有', ch.chain, tagsAt(d.hash)));
   $('#hits').innerHTML = hits.join('');
 
+  // 折叠时被隐藏的提交也记为已见，切回完整历史时不会误报“新提交”
+  for (const c of data.commits) seen.add(c.hash);
+
   updateTimeline(L, W, H);
   const curRef = data.refs.find((r) => r.current);
   if (curRef) $('#tl-view').style.setProperty('--dot', L.chainColorOf(curRef.hash));
@@ -741,15 +788,45 @@ function shortRepo(p) {
   return parts.length > 4 ? '…/' + parts.slice(-3).join('/') : s;
 }
 
+// 工作区状态单独更新：图没变时也只刷新这三个计数，不重绘整张 SVG
+function updateWt(data) {
+  const wt = data.status || { staged: 0, unstaged: 0, untracked: 0 };
+  const wtEl = $('#wt');
+  if (!wtEl) return;
+  const wtParts = [];
+  if (wt.staged) wtParts.push(`<span class="s">●${wt.staged}</span>`);
+  if (wt.unstaged) wtParts.push(`<span class="u">●${wt.unstaged}</span>`);
+  if (wt.untracked) wtParts.push(`<span class="n">●${wt.untracked}</span>`);
+  if (wtParts.length) {
+    wtEl.innerHTML = wtParts.join('');
+    wtEl.title = `已暂存 ${wt.staged} · 未暂存 ${wt.unstaged} · 未跟踪 ${wt.untracked}`;
+    wtEl.hidden = false;
+  } else {
+    wtEl.hidden = true;
+  }
+}
+
 // —— 时间轴（横：顶部水平；竖：右侧纵向）——
 let tlGeom = { len: 0, view: 0, total: 0 };
 function updateTimeline(L, W, H) {
   const horizontal = isH();
+  // 时间轴虚线用 SVG line 画，避免 WebKitGTK 把 1px repeating-gradient 偶发渲染成实线
+  const rule = document.querySelector('#timeline .tl-rule line');
+  if (rule) {
+    if (horizontal) {
+      rule.setAttribute('x1', '0'); rule.setAttribute('y1', '50%');
+      rule.setAttribute('x2', '100%'); rule.setAttribute('y2', '50%');
+    } else {
+      rule.setAttribute('x1', '50%'); rule.setAttribute('y1', '0');
+      rule.setAttribute('x2', '50%'); rule.setAttribute('y2', '100%');
+    }
+  }
   tlGeom = horizontal
     ? { len: L.contentW, view: W, total: L.svgW }
     : { len: L.contentH, view: H, total: L.svgH };
   const scrollable = tlGeom.total - tlGeom.view > 2;
   const el = $('#timeline');
+  el.hidden = false;
   el.classList.toggle('static', !scrollable);
   el.classList.toggle('vertical', !horizontal);
   el.title = scrollable ? '拖动查看历史，实心点是 release / tag' : '历史未超出窗口，无需滚动';
@@ -852,6 +929,7 @@ function showNotice(text) {
   const el = $('#notice');
   if (!el) return;
   el.textContent = text;
+  el.title = text;
   el.hidden = false;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => { el.hidden = true; }, 2600);
@@ -1090,6 +1168,31 @@ function bindUi() {
       if (v) switchRepo(v);
     }
   });
+  // 从系统文件管理器选择仓库目录
+  $('#repo-browse').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const options = { directory: true, multiple: false, title: '选择 Git 仓库' };
+    if (lastData && lastData.repo) options.defaultPath = lastData.repo;
+    try {
+      let picked = null;
+      if (window.__TAURI__ && window.__TAURI__.dialog && window.__TAURI__.dialog.open) {
+        picked = await window.__TAURI__.dialog.open(options);
+      } else {
+        const inv = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)
+          || (window.__TAURI__ && (window.__TAURI__.core?.invoke || window.__TAURI__.invoke));
+        if (inv) picked = await inv('plugin:dialog|open', { options });
+      }
+      const path = Array.isArray(picked) ? picked[0] : picked;
+      if (typeof path === 'string' && path) switchRepo(path);
+      else if (!isTauri) {
+        $('#repo-path').focus();
+        showNotice('浏览器版请手动输入仓库路径');
+      }
+    } catch (err) {
+      showNotice(err && err.message ? err.message : String(err));
+      console.error(err);
+    }
+  });
 
   // fetch
   const fetchBtn = $('#fetch');
@@ -1104,7 +1207,14 @@ function bindUi() {
       if (!d.ok) throw new Error(d.error);
       await refresh();
       if (verbose) showNotice('已 fetch');
-    } catch (error) { showNotice(error.message); console.error(error); }
+    } catch (error) {
+      const msg = String(error.message || error);
+      const hint = /ssh|could not read|permission denied|resolve host|connection timed out|network is unreachable|proxy/i.test(msg)
+        ? '（检查 SSH 密钥 / 网络 / 代理）'
+        : '';
+      showNotice(msg + hint);
+      console.error(error);
+    }
     finally { fetchBtn.classList.remove('busy'); fetchBtn.textContent = 'FETCH'; }
   }
   fetchBtn.addEventListener('click', () => doFetch(true));
@@ -1117,7 +1227,28 @@ function bindUi() {
   autoBtn.addEventListener('click', () => setAuto(!autoBtn.classList.contains('on')));
   try { if (localStorage.getItem('gitty-auto-fetch') === '1') setAuto(true); } catch {}
 
-  window.addEventListener('resize', () => { if (lastData) render(lastData); });
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (lastData) render(lastData); }, 80);
+  });
+
+  // 竖版左右边缘拖拽调宽（WebView 无边框窗口没有系统 resize 边）
+  const bindResize = (selector, direction) => {
+    const el = $(selector);
+    if (!el) return;
+    el.addEventListener('pointerdown', (e) => {
+      if (!isTauri || !document.documentElement.classList.contains('tauri-linux')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const inv = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)
+        || (window.__TAURI__ && (window.__TAURI__.core?.invoke || window.__TAURI__.invoke));
+      if (inv) inv('plugin:window|start_resize_dragging', { direction }).catch((err) => console.error(err));
+    });
+  };
+  bindResize('#resize-e', 'East');
+  bindResize('#resize-w', 'West');
+
   placeTimeline();
   updateOrientButton();
   setMode(document.documentElement.dataset.mode || 'local');
@@ -1128,6 +1259,13 @@ function placeTimeline() {
   if (isH()) document.querySelector('header').insertBefore(tl, document.querySelector('.h-right'));
   else $('#graph').appendChild(tl);
 }
+function setFold(next) {
+  foldMerged = !!next;
+  if (lastData) render(lastData);
+  showNotice(foldMerged ? '已折叠已合并历史' : '已展开完整历史');
+}
+// 供 Linux 托盘菜单通过 eval 调用
+window.__gittySetFold = setFold;
 function updateOrientButton() {
   const btn = $('#orient');
   if (btn) {
@@ -1156,6 +1294,8 @@ function setOrientation(next) {
   }
   if (lastData) render(lastData);
 }
+// 供 Linux 托盘菜单通过 eval 调用
+window.__gittySetOrientation = setOrientation;
 
 function setMode(mode) {
   document.documentElement.dataset.mode = mode;
@@ -1174,7 +1314,20 @@ async function refresh() {
   try {
     const data = await fetch(`${API}/api/graph`, { cache: 'no-store' }).then((r) => r.json());
     if (!data.ok) throw new Error(data.error);
-    render(data);
+    // 数据没变就不重绘：避免每 2.2 秒重建 SVG 导致时间轴/图层周期性闪烁
+    const same = lastData
+      && Number.isFinite(data.revision)
+      && data.revision === lastRevision
+      && data.repo === lastRepo;
+    lastRevision = data.revision;
+    lastRepo = data.repo;
+    if (same) {
+      lastData = data;
+      updateWt(data);
+      scrollToNewest();
+    } else {
+      render(data);
+    }
     $('#status').className = 'status';
     $('#status').title = '已连接';
   } catch (error) {
@@ -1185,6 +1338,7 @@ async function refresh() {
       empty.hidden = false;
       empty.innerHTML = '<div class="empty-title">点击上方路径框选择一个 Git 仓库</div><div class="empty-hint">只读访问 · 支持任意本地 Git 仓库</div>';
       $('#graph').hidden = true;
+      $('#timeline').hidden = true;
       $('#repo-label').textContent = '选择 Git 仓库';
       $('#repo').classList.add('needs-repo');
     }
@@ -1193,10 +1347,26 @@ async function refresh() {
 }
 
 bindUi();
-if (isTauri && orientation === 'v') {
+// Linux 首次 map 后 WM 可能覆盖掉窗口尺寸，页面加载完再确认一次当前方向；
+// Windows/macOS 维持原来的「仅竖版启动时重新定位」行为。
+const isLinuxTauri = document.documentElement.classList.contains('tauri-linux');
+if (isTauri && (orientation === 'v' || isLinuxTauri)) {
   const api = window.__TAURI__;
   const inv = api && (api.core?.invoke || api.invoke);
-  if (inv) inv('set_orientation', { orientation: 'v' }).catch(() => {});
+  if (inv) inv('set_orientation', { orientation }).catch(() => {});
+}
+// 同步系统托盘里的“隐藏已合并历史”勾选状态
+if (isTauri && isLinuxTauri) {
+  const api = window.__TAURI__;
+  const inv = api && (api.core?.invoke || api.invoke);
+  if (inv) {
+    inv('get_fold').then((folded) => {
+      if (typeof folded === 'boolean' && folded !== foldMerged) {
+        foldMerged = folded;
+        if (lastData) render(lastData);
+      }
+    }).catch(() => {});
+  }
 }
 refresh();
 setInterval(refresh, 2200);

@@ -8,23 +8,24 @@
   </head>
   <body>
     <main class="radar" aria-live="polite">
-      <header>
+      <header data-tauri-drag-region="deep">
         <div class="h-left">
           <div class="brand"><span class="brand-mark"></span><span>GITTY</span></div>
           <div class="repo-wrap">
             <button id="repo" class="repo" title="切换仓库"><span id="repo-label">正在读取仓库</span><i>▾</i></button>
-            <div id="repo-menu" class="repo-menu" hidden>
+            <div id="repo-menu" class="repo-menu" hidden data-tauri-drag-region="false">
               <div class="repo-menu-title">最近仓库</div>
               <div id="repo-list" class="repo-list"></div>
               <div class="repo-menu-input">
-                <input id="repo-path" class="repo-path" placeholder="输入仓库路径，回车打开" />
+                <input id="repo-path" class="repo-path" placeholder="输入仓库路径（支持 ~），回车打开" />
+                <button type="button" id="repo-browse" class="repo-browse" title="从文件管理器选择文件夹">浏览…</button>
               </div>
             </div>
           </div>
           <div id="wt" class="wt" hidden></div>
         </div>
-        <div id="timeline" class="timeline" title="拖动查看历史，实心点是 release">
-          <div class="tl-line"></div>
+        <div id="timeline" class="timeline" title="拖动查看历史，实心点是 release" data-tauri-drag-region="false">
+          <svg class="tl-rule" aria-hidden="true"><line /></svg>
           <div id="tl-marks" class="tl-marks"></div>
           <div id="tl-view" class="tl-view"></div>
         </div>
@@ -77,6 +78,8 @@
         </div>
       </section>
     </main>
+    <div id="resize-w" class="resize-w" title="拖动调整竖版宽度"></div>
+    <div id="resize-e" class="resize-e" title="拖动调整竖版宽度"></div>
     <div id="tip" class="tip" hidden></div>
     <div id="detail" class="detail" hidden></div>
     <script type="module" src="/app.js"></script>

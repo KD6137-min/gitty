@@ -3,11 +3,11 @@
 一条贴在桌面上的 Git 分支雷达，支持横 / 竖两种形态：
 
 - **横版**：约 6cm 高的深色毛玻璃横条贴在屏幕底部，时间轴横向（最新在右），分支为车道
-- **竖版**：约 6cm 宽的竖条贴在屏幕左侧，时间轴纵向（最新在上），分支为列，分支名旋转 90°
+- **竖版**：深色毛玻璃竖条贴在屏幕左侧，时间轴纵向（最新在上），分支为列，分支名按 `/` 水平分行
 
-顶栏的「横 / 竖」按钮可随时切换，窗口会自动重新定位。
+横 / 竖可随时切换：Linux 在系统托盘菜单里，Windows/macOS 用顶栏按钮；窗口会自动重新定位。
 
-**1.1**：Windows 桌面版已可用（Tauri + WebView2 + 原生 Acrylic）；macOS 版已在 Mac 上适配（vibrancy + 菜单栏图标）。
+**1.1**：Windows 桌面版已可用（Tauri + WebView2 + 原生 Acrylic）；macOS 版已在 Mac 上适配（vibrancy + 菜单栏图标）；Linux/X11 本地版可用（贴主屏工作区，无系统级背景模糊时以深色叠层降级）。
 
 ## 界面
 
@@ -21,20 +21,22 @@
 
 ## 功能
 
-- 横 / 竖两种形态，运行时一键切换（竖版时间轴竖直、分支名旋转）
+- 横 / 竖两种形态，运行时一键切换（竖版时间轴竖直、分支名按 `/` 分行）
+- 系统托盘菜单（Linux）：显示 / 隐藏、横版 / 竖版、隐藏已合并历史（默认隐藏；只影响绘制，不影响 Git 数据）
+- 窗口移动：拖顶栏可把横条 / 竖条拖到任意显示器，松手后按落点自动吸附到该屏的上/下边（横版）或左/右缘（竖版）并记住；竖版默认半屏宽，拖内侧边可调宽
 - 本地 / 远端视角切换（0.5s 过渡）
 - 聚焦模式：点击分支名或提交点；显示汇入分支名；方向键切换（上下切车道、左右切同车道相邻分支）；点击外部或 Esc 退出
 - 提交详情：双击提交点查看作者、时间、提交信息、文件增删
 - 工作区状态：已暂存 / 未暂存 / 未跟踪计数
 - Windows 系统托盘：菱形图标，右键显示 / 隐藏 / 退出 Gitty
-- 仓库切换：点击路径下拉，最近仓库持久化
+- 仓库切换：点击路径下拉，最近仓库持久化；可手动输入路径（支持 `~`），或从系统文件管理器选择文件夹
 - FETCH 手动拉取；AUTO 每 60 秒自动 fetch（记忆开关）
 - 快捷键：`T` 视角、`F` 聚焦、`R` 刷新、`End` 回到最新、`Esc` 退出聚焦
 - 只读：不执行 checkout / push / rebase 等写操作
 
 ## 桌面版
 
-窗口：无边框、透明、跳过任务栏、置底不抢焦点；横版贴主屏工作区底部（全宽×6cm），竖版贴左侧（6cm×全高）。Windows 使用原生 Acrylic，macOS 使用 vibrancy。
+窗口：无边框、透明、跳过任务栏、置底不抢焦点；横版贴在任意显示器工作区的上边或下边（全宽×6cm），竖版贴左缘或右缘（Windows/macOS 6cm 宽；Linux 默认半屏宽，可拖内侧边调整）。Windows 使用原生 Acrylic，macOS 使用 vibrancy。Linux/X11 用 RandR + `_NET_WORKAREA` 定位，并按显示器分别吸附；Linux 托盘菜单提供横/竖切换和“隐藏已合并历史”（默认开启，只影响绘制）。X11 没有通用的窗口背后模糊 API，因此只保留 `rgba(18,18,16,.62)` 的深色叠层降级，内层的虚焦层级、玻璃带与点线语义保持不变。
 
 ```powershell
 npm install
@@ -48,6 +50,16 @@ npm run tauri:build    # 生成安装包（release）
 - Rust（rustup，MSVC toolchain）
 - Visual Studio Build Tools（C++ 工作负载 + Windows SDK）
 - WebView2 Runtime（Win10/11 通常已自带）
+
+Linux（X11）前置条件：
+
+```bash
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev libssl-dev \
+  libxdo-dev libdbus-1-dev build-essential pkg-config
+npm install
+npm run tauri:dev
+```
 
 ## 浏览器版
 

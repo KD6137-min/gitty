@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync, watch, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -139,7 +140,10 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/repo' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);
-      const target = resolve(String(body.path || '').trim());
+      const raw = String(body.path || '').trim();
+      // 手动输入的 ~ / ~/xxx 展开为用户目录
+      const expanded = raw === '~' || raw.startsWith('~/') ? join(homedir(), raw.slice(1)) : raw;
+      const target = resolve(expanded);
       const { stdout } = await exec('git', ['-C', target, '-c', `safe.directory=${target}`, 'rev-parse', '--show-toplevel'], { windowsHide: true, timeout: 15000 });
       const top = stdout.trim();
       if (!top) throw new Error('不是 git 仓库');
