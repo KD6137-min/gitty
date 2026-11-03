@@ -19,10 +19,13 @@ html.tauri .radar { background: rgba(18, 18, 16, .22); -webkit-backdrop-filter: 
 html.tauri-macos { color-scheme: dark; }
 html.tauri-macos .radar { background: rgba(18, 18, 16, .42); border-radius: 16px 16px 0 0; overflow: hidden; }
 /* Linux/X11：没有系统级背景模糊（window-vibrancy 不支持 Linux，Mutter 也不模糊窗口背后），
-   用更深的暗色叠层降级；内层虚焦、玻璃带与 16px 圆角保持不变。竖版贴左，圆角放在外缘。 */
+   且透明窗口在软件合成下会逐渐累积变暗；改用不透明深色底，内层虚焦、玻璃带与 16px 圆角保持不变。
+   竖版贴左，圆角放在外缘。 */
 html.tauri-linux { color-scheme: dark; }
-html.tauri-linux .radar { background: rgba(18, 18, 16, .62); border-radius: 16px 16px 0 0; overflow: hidden; }
+html.tauri-linux .radar { background: #1e1e1b; border-radius: 16px 16px 0 0; overflow: hidden; }
 html.tauri-linux[data-orient="v"] .radar { border-radius: 0 16px 16px 0; }
+/* X11 没有桌面 blur，这些 backdrop-filter 只会增加重绘成本 */
+html.tauri-linux .repo-menu { -webkit-backdrop-filter: none; backdrop-filter: none; }
 /* 横版贴顶：圆角、描边和投影翻到下方 */
 html.tauri-linux[data-orient="h"][data-h-edge="top"] .radar {
   border-radius: 0 0 16px 16px;
@@ -229,7 +232,7 @@ html.tauri-linux #orient { display: none !important; }
 /* 不放滚动条：横向靠滚轮/触控板，纵向由行高压缩解决 */
 .scroll { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; -ms-overflow-style: none; }
 .scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
-#canvas { display: block; }
+#canvas { display: block; transform: translateZ(0); }
 /* Linux 竖版：左右两条 5px 热区，贴左拖右缘、贴右拖左缘 */
 .resize-e, .resize-w { display: none; position: fixed; top: 0; width: 5px; height: 100%; z-index: 30; cursor: ew-resize; }
 .resize-e { right: 0; }
@@ -283,6 +286,10 @@ html.tauri-linux .back-local { filter: url(#gitty-blur-strong); }
 html.tauri-linux .back-dots { filter: url(#gitty-blur-soft); }
 html.tauri-linux .rings { filter: url(#gitty-blur-soft); }
 html.tauri-linux[data-mode="remote"] .rings { filter: none; }
+/* 不可见图层不再计算模糊滤镜 */
+html.tauri-linux[data-mode="local"] .back-local,
+html.tauri-linux[data-mode="local"] .back-dots { filter: none; }
+html.tauri-linux[data-mode="remote"] .back-remote { filter: none; }
 
 /* 图形 */
 .edge { stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
@@ -335,7 +342,7 @@ html[data-mode="remote"] .chip-ghost { display: inline; opacity: 1; }
 .tag-name { font: 500 12px ui-monospace, Consolas, monospace; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 3px; stroke-linejoin: round; }
 
 /* 提交详情卡（双击提交点） */
-#detail { position: fixed; z-index: 21; width: 380px; max-height: 60vh; overflow: auto; padding: 14px 16px; background: var(--ink); color: #141412; font-size: 13px; line-height: 1.5; box-shadow: 6px 6px 0 var(--red); }
+#detail { position: fixed; z-index: 21; width: 380px; max-height: 60vh; overflow: auto; padding: 14px 16px; background: var(--ink); color: #141412; font-size: 13px; line-height: 1.5; box-shadow: 6px 6px 0 var(--red); will-change: transform; }
 #detail h3 { margin: 0 0 4px; font: 700 15px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; }
 #detail .meta { color: #5A574F; font-size: 11.5px; margin-bottom: 8px; }
 #detail .subject { font-weight: 600; margin-bottom: 6px; }
@@ -346,7 +353,7 @@ html[data-mode="remote"] .chip-ghost { display: inline; opacity: 1; }
 #detail li span:last-child { color: #5A574F; white-space: nowrap; }
 #detail .more { color: #5A574F; font-size: 11px; margin-top: 4px; }
 
-#tip { position: fixed; z-index: 20; width: 280px; padding: 10px 13px; background: var(--ink); color: #141412; font-size: 15px; line-height: 1.5; box-shadow: 5px 5px 0 var(--red); }
+#tip { position: fixed; z-index: 20; width: 280px; padding: 10px 13px; background: var(--ink); color: #141412; font-size: 15px; line-height: 1.5; box-shadow: 5px 5px 0 var(--red); will-change: transform; }
 #tip b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tip span { display: block; color: #4A473F; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tip em { display: block; color: #7A766C; font-style: normal; margin-top: 3px; }
