@@ -1,13 +1,10 @@
 # Gitty
 
-一条贴在桌面上的 Git 分支雷达，支持横 / 竖两种形态：
+一条贴在桌面上的 Git 分支雷达：约 6cm 高的深色毛玻璃横条贴在屏幕边缘，时间轴横向（最新在右），分支为车道。
 
-- **横版**：约 6cm 高的深色毛玻璃横条贴在屏幕底部，时间轴横向（最新在右），分支为车道
-- **竖版**：深色毛玻璃竖条贴在屏幕左侧，时间轴纵向（最新在上），分支为列，分支名按 `/` 水平分行
+窗口可以拖到任意显示器，松手后自动吸附到该屏的上边或下边；Linux/macOS 会记住显示器与吸附边。
 
-横 / 竖可随时切换：Linux 在系统托盘菜单里，Windows/macOS 用顶栏按钮；窗口会自动重新定位。
-
-**1.1**：Windows 桌面版已可用（Tauri + WebView2 + 原生 Acrylic）；macOS 版已在 Mac 上适配（vibrancy + 菜单栏图标）；Linux/X11 本地版可用（贴主屏工作区，无系统级背景模糊时以深色叠层降级）。
+**1.1**：Windows 桌面版已可用（Tauri + WebView2 + 原生 Acrylic）；macOS 版已对齐 Linux 的桌面能力（vibrancy、菜单栏托盘、多显示器上下吸附、随包 Node）；Linux/X11 本地版可用（贴工作区，无系统级背景模糊时以深色底降级）。1.1.7 起移除竖版，专注横向雷达。
 
 ## 界面
 
@@ -22,14 +19,13 @@
 
 ## 功能
 
-- 横 / 竖两种形态，运行时一键切换（竖版时间轴竖直、分支名按 `/` 分行）
-- 系统托盘菜单（Linux）：显示 / 隐藏、横版 / 竖版、隐藏已删除分支（默认隐藏；只隐藏没有当前 ref 的历史侧链，已合并但仍有 ref 的分支保留；不影响 Git 数据）
-- 窗口移动：拖顶栏可把横条 / 竖条拖到任意显示器，松手后按落点自动吸附到该屏的上/下边（横版）或左/右缘（竖版）并记住；竖版默认半屏宽，拖内侧边可调宽
+- 系统托盘菜单（Linux/macOS）：显示 / 隐藏、隐藏已删除分支（默认隐藏；只隐藏没有当前 ref 的历史侧链，已合并但仍有 ref 的分支保留；不影响 Git 数据）
+- 窗口移动（Linux/macOS）：拖顶栏可把横条拖到任意显示器，松手后按落点自动吸附到该屏的上边或下边并记住
 - 本地 / 远端视角切换（0.5s 过渡）
 - 聚焦模式：点击分支名或提交点；显示汇入分支名；方向键切换（上下切车道、左右切同车道相邻分支）；点击外部或 Esc 退出
 - 提交详情：双击提交点查看作者、时间、提交信息、文件增删
 - 工作区状态：已暂存 / 未暂存 / 未跟踪计数
-- Windows 系统托盘：菱形图标，右键显示 / 隐藏 / 退出 Gitty
+- Windows 系统托盘：菱形图标，右键显示 / 隐藏 / 退出 Gitty；macOS 菜单栏提供同款入口，并额外支持隐藏已删除分支
 - 仓库切换：点击路径下拉，最近仓库持久化；可手动输入路径（支持 `~`），或从系统文件管理器选择文件夹
 - FETCH 手动拉取；AUTO 每 60 秒自动 fetch（记忆开关）
 - 快捷键：`T` 视角、`F` 聚焦、`R` 刷新、`End` 回到最新、`Esc` 退出聚焦
@@ -37,7 +33,7 @@
 
 ## 桌面版
 
-窗口：无边框、透明、跳过任务栏、置底不抢焦点；横版贴在任意显示器工作区的上边或下边（全宽×6cm），竖版贴左缘或右缘（Windows/macOS 6cm 宽；Linux 默认半屏宽，可拖内侧边调整）。Windows 使用原生 Acrylic，macOS 使用 vibrancy。Linux/X11 用 RandR + `_NET_WORKAREA` 定位，并按显示器分别吸附；Linux 托盘菜单提供横/竖切换和“隐藏已删除分支”（默认开启，只影响绘制）。X11 没有通用的窗口背后模糊 API，因此改用不透明深色底 `#1e1e1b`（透明窗口在软件合成下会逐渐累积变暗），内层的虚焦层级、玻璃带与点线语义保持不变。
+窗口：无边框、透明、跳过任务栏、置底不抢焦点；横条贴在任意显示器工作区的上边或下边（全宽×6cm）。Windows 使用原生 Acrylic，macOS 使用 vibrancy。Linux/X11 用 RandR + `_NET_WORKAREA` 定位，macOS 用 `NSScreen.visibleFrame` 定位，两者都会按显示器吸附并记住屏幕与边。Linux/macOS 托盘菜单提供“隐藏已删除分支”（默认开启，只影响绘制）。X11 没有通用的窗口背后模糊 API，因此改用不透明深色底 `#1e1e1b`（透明窗口在软件合成下会逐渐累积变暗），内层的虚焦层级、玻璃带与点线语义保持不变。
 
 ```powershell
 npm install
@@ -62,14 +58,24 @@ npm install
 npm run tauri:dev
 ```
 
-Linux release 打包前会额外拉取随包 Node 运行时（不提交到仓库，约 100MB）：
+macOS 前置条件：
 
 ```bash
-bash scripts/fetch-node.sh
-npm run tauri:build -- --bundles deb
+xcode-select --install
+# Rust: https://rustup.rs
+npm install
+npm run tauri:dev
 ```
 
-安装包会自带 `gitty-node` sidecar，优先于系统 Node；开发模式仍使用系统 `node`。
+Linux/macOS 开发与 release 打包前会额外拉取随包 Node 运行时（不提交到仓库，约 50–100MB）：
+
+```bash
+bash scripts/fetch-node.sh          # 按当前系统和架构下载
+npm run tauri:build                 # macOS: .app / .dmg
+npm run tauri:build -- --bundles deb  # Linux: .deb
+```
+
+安装包会自带 `gitty-node` sidecar，优先于系统 Node；没有 sidecar 时回退到系统 `node`。
 
 ## 浏览器版
 

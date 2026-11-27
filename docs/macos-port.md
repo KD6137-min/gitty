@@ -135,3 +135,12 @@ xattr -dr com.apple.quarantine /Applications/Gitty.app
 - 窗口不透明：确认 `macos-private-api` 特性和 `transparent(true)`
 - vibrancy 无效：窗口需透明，且 `apply_vibrancy` 在窗口显示前后调用时机要对
 - 坐标系：Cocoa 原点在左下角，设置 NSWindow frame 时 y 从底部算
+
+## 1.1.7 更新（macOS 对齐 Linux 1.1.6）
+
+- 移除竖版，专注横向雷达
+- 菜单栏托盘新增「隐藏已删除分支」（默认隐藏，勾选状态持久化）
+- 多显示器：拖顶栏后按窗口中心吸附到该屏的上边或下边，并记住屏幕与吸附边
+- 贴顶时圆角、描边和投影翻到下方
+- release 包通过 `scripts/fetch-node.sh` 打入 `gitty-node` sidecar，不再依赖系统 Node
+- 构建：`bash scripts/fetch-node.sh && npm run tauri:build`
