@@ -1,7 +1,5 @@
-// Gitty 前端：分支雷达（横 / 竖两种方向）
-// 布局把「时间轴」和「车道轴」抽象成两个方向：
-//   横向：时间 = x（最新在右），车道 = y（自上而下）
-//   竖向：时间 = y（最新在上），车道 = x（自左而右）
+// Gitty 前端：横向分支雷达
+//   时间 = x（最新在右），车道 = y（自上而下）
 // 点线语言：
 //   本地提交 = 实心彩色小圆点；远端提交 = 空心圆环（环内镂空，线不穿环）
 //   共有提交 = 大圆套小点；tag = 指向提交的三角 + 标签名
@@ -11,39 +9,31 @@ const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const S = (v) => Number(v).toFixed(1);
 
 const isTauri = !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
+const isMacTauri = isTauri && /Macintosh/.test(navigator.userAgent);
+const isLinuxTauri = isTauri && /Linux/.test(navigator.userAgent);
 if (isTauri) {
   document.documentElement.classList.add('tauri');
   // macOS vibrancy 视图圆角为 16，页面叠加层同步圆角，避免四角露出深色方块
-  if (/Macintosh/.test(navigator.userAgent)) document.documentElement.classList.add('tauri-macos');
+  if (isMacTauri) document.documentElement.classList.add('tauri-macos');
   // Linux/X11 没有系统级背景模糊：只加深暗色叠加，内层虚焦语义不变
-  else if (/Linux/.test(navigator.userAgent)) document.documentElement.classList.add('tauri-linux');
+  else if (isLinuxTauri) document.documentElement.classList.add('tauri-linux');
 }
 // Tauri 内置资源来源需要显式指向本地 Node 服务；浏览器里用同源
 const API = isTauri ? 'http://localhost:4173' : '';
 
-const qsOrient = new URLSearchParams(location.search).get('orient');
-let orientation = qsOrient === 'v' || qsOrient === 'h'
-  ? qsOrient
-  : (localStorage.getItem('gitty-orient') === 'v' ? 'v' : 'h');
-document.documentElement.dataset.orient = orientation;
-const isH = () => orientation === 'h';
-// 隐藏已删除分支：Linux 桌面端默认开启，由顶部系统托盘菜单切换；其它平台保持完整历史
-let foldMerged = document.documentElement.classList.contains('tauri-linux')
+// 隐藏已删除分支：Linux/macOS 桌面端默认开启，由系统托盘菜单切换；其它平台保持完整历史
+let foldMerged = isLinuxTauri || isMacTauri
   || new URLSearchParams(location.search).get('fold') === '1';
 const qsMode = new URLSearchParams(location.search).get('mode');
 if (qsMode === 'remote' || qsMode === 'local') document.documentElement.dataset.mode = qsMode;
 
 // —— 布局常量（像素，与 viewBox 1:1）——
-const MARGIN_TIME = 30;    // 时间轴两端留白（横：左右；竖：上下底）
-const MARGIN_LANE = 44;    // 车道轴两端留白（横：上下；竖：左右）；给 tag 标签留出上方空间
-const TAIL_H = 240;        // 横版右侧名字预留
-const TAIL_TOP = 150;      // 竖版顶部（旋转名字）预留
-const TAIL_BOTTOM = 60;    // 竖版底部预留
-const ROW_MIN = 14, ROW_MAX = 60;   // 横版行高
-const COL_MIN = 28, COL_MAX = 80;   // 竖版列宽
+const MARGIN_TIME = 30;    // 时间轴左右留白
+const MARGIN_LANE = 44;    // 车道轴上下留白；给 tag 标签留出上方空间
+const TAIL_H = 240;        // 右侧名字预留
+const ROW_MIN = 14, ROW_MAX = 60;   // 行高
 const TIME_MIN = 44, TIME_MAX = 130; // 时间轴间距
-const PAD_NEWER_H = 240, PAD_OLDER_H = 140;  // 横版装箱预留（右/左）
-const PAD_NEWER_V = 150, PAD_OLDER_V = 60;   // 竖版装箱预留（上/下）
+const PAD_NEWER_H = 240, PAD_OLDER_H = 140;  // 装箱预留（右/左）
 const COLORS = [
   '#EDE9DE', '#FF6B55', '#6D9BFF', '#F5C542', '#B98CFF',
   '#4FD1B0', '#FF9F43', '#7BD389', '#FF8FB1', '#64D8E0',
@@ -83,72 +73,59 @@ function topoSort(commits) {
 
 // —— 分叉 / 汇入的通用几何（在最终坐标里构建）——
 function branchPath(p, c) {
-  const h = isH();
-  const laneDelta = h ? c.y - p.y : c.x - p.x;
-  const timeDelta = h ? c.x - p.x : c.y - p.y;
+  const laneDelta = c.y - p.y;
+  const timeDelta = c.x - p.x;
   const ls = Math.sign(laneDelta) || 1;
   const ts = Math.sign(timeDelta) || 1;
   const rr = Math.min(12, Math.abs(laneDelta) * 0.45, Math.abs(timeDelta) * 0.45);
-  const a = h ? { x: p.x, y: c.y } : { x: c.x, y: p.y };
-  const pre = h ? { x: a.x, y: a.y - ls * rr } : { x: a.x - ls * rr, y: a.y };
-  const post = h ? { x: a.x + ts * rr, y: a.y } : { x: a.x, y: a.y + ts * rr };
+  const a = { x: p.x, y: c.y };
+  const pre = { x: a.x, y: a.y - ls * rr };
+  const post = { x: a.x + ts * rr, y: a.y };
   return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(post.x)} ${S(post.y)} L ${S(c.x)} ${S(c.y)}`;
 }
 
 function mergePath(p, c, blocker = null) {
-  const h = isH();
-  const timeDelta = h ? c.x - p.x : c.y - p.y;
-  const laneDelta = h ? c.y - p.y : c.x - p.x;
+  const timeDelta = c.x - p.x;
+  const laneDelta = c.y - p.y;
   const ts = Math.sign(timeDelta) || 1;
   // blocker：同一车道上挡在父子之间的最近节点。此时提前拐弯，避免斜线贴着
   // 那个节点，让人误以为边是从它连出来的。
   const natural = Math.max(22, Math.min(Math.abs(timeDelta) * 0.5, Math.abs(laneDelta) * 0.9));
   const run = blocker == null
     ? natural
-    : Math.min(natural, Math.max(8, Math.abs(blocker - (h ? p.x : p.y)) * 0.22));
+    : Math.min(natural, Math.max(8, Math.abs(blocker - p.x) * 0.22));
   const rr = Math.min(10, run * 0.55);
-  const a = h ? { x: p.x + ts * run, y: p.y } : { x: p.x, y: p.y + ts * run };
-  const pre = h ? { x: a.x - ts * rr, y: a.y } : { x: a.x, y: a.y - ts * rr };
+  const a = { x: p.x + ts * run, y: p.y };
+  const pre = { x: a.x - ts * rr, y: a.y };
   const dx = c.x - a.x, dy = c.y - a.y;
   const len = Math.hypot(dx, dy) || 1;
   const e = { x: a.x + (dx / len) * rr, y: a.y + (dy / len) * rr };
   return `M ${S(p.x)} ${S(p.y)} L ${S(pre.x)} ${S(pre.y)} Q ${S(a.x)} ${S(a.y)} ${S(e.x)} ${S(e.y)} L ${S(c.x)} ${S(c.y)}`;
 }
 
-// rebase 副本连线：直线 + 圆角折线。横版走 横-竖-横，竖版走 竖-横-竖。
+// rebase 副本连线：直线 + 圆角折线（横-竖-横）。
 function rebaseLinkPath(a, b) {
-  const h = isH();
   const dx = b.x - a.x, dy = b.y - a.y;
-  if (Math.abs(h ? dy : dx) < 0.5) {
+  if (Math.abs(dy) < 0.5) {
     return {
       d: `M ${S(a.x)} ${S(a.y)} L ${S(b.x)} ${S(b.y)}`,
-      lx: h ? (a.x + b.x) / 2 : Math.max(a.x, b.x) + 10,
-      ly: h ? Math.min(a.y, b.y) - 8 : (a.y + b.y) / 2,
-      anchor: h ? 'middle' : 'start',
+      lx: (a.x + b.x) / 2,
+      ly: Math.min(a.y, b.y) - 8,
+      anchor: 'middle',
     };
   }
-  const r = Math.min(10, Math.abs(h ? dx : dy) / 2, Math.abs(h ? dy : dx) / 2);
+  const r = Math.min(10, Math.abs(dx) / 2, Math.abs(dy) / 2);
   const sx = Math.sign(dx) || 1, sy = Math.sign(dy) || 1;
-  if (h) {
-    const midX = (a.x + b.x) / 2;
-    return {
-      d: `M ${S(a.x)} ${S(a.y)} L ${S(midX - sx * r)} ${S(a.y)} Q ${S(midX)} ${S(a.y)} ${S(midX)} ${S(a.y + sy * r)} L ${S(midX)} ${S(b.y - sy * r)} Q ${S(midX)} ${S(b.y)} ${S(midX + sx * r)} ${S(b.y)} L ${S(b.x)} ${S(b.y)}`,
-      lx: midX + 10,
-      ly: (a.y + b.y) / 2,
-      anchor: 'start',
-    };
-  }
-  const midY = (a.y + b.y) / 2;
+  const midX = (a.x + b.x) / 2;
   return {
-    d: `M ${S(a.x)} ${S(a.y)} L ${S(a.x)} ${S(midY - sy * r)} Q ${S(a.x)} ${S(midY)} ${S(a.x + sx * r)} ${S(midY)} L ${S(b.x - sx * r)} ${S(midY)} Q ${S(b.x)} ${S(midY)} ${S(b.x)} ${S(midY + sy * r)} L ${S(b.x)} ${S(b.y)}`,
-    lx: (a.x + b.x) / 2,
-    ly: midY - 8,
-    anchor: 'middle',
+    d: `M ${S(a.x)} ${S(a.y)} L ${S(midX - sx * r)} ${S(a.y)} Q ${S(midX)} ${S(a.y)} ${S(midX)} ${S(a.y + sy * r)} L ${S(midX)} ${S(b.y - sy * r)} Q ${S(midX)} ${S(b.y)} ${S(midX + sx * r)} ${S(b.y)} L ${S(b.x)} ${S(b.y)}`,
+    lx: midX + 10,
+    ly: (a.y + b.y) / 2,
+    anchor: 'start',
   };
 }
 
 function layout(data, viewportW, viewportH, foldMerged = false) {
-  const h = isH();
   let commits = topoSort(data.commits);
   let byHash = new Map(commits.map((c) => [c.hash, c]));
   let inWin = new Set(commits.map((c) => c.hash));
@@ -232,19 +209,14 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
     for (const ch of chains) ch.commits = ch.commits.filter((hash) => byHash.has(hash));
   }
 
-  // —— 时间轴 ——
+  // —— 时间轴（最新在右）——
   const n = commits.length;
-  const timeAvail = h
-    ? Math.max(viewportW - MARGIN_TIME * 2 - TAIL_H, 80)
-    : Math.max(viewportH - TAIL_TOP - TAIL_BOTTOM, 80);
+  const timeAvail = Math.max(viewportW - MARGIN_TIME * 2 - TAIL_H, 80);
   const spacing = n <= 1 ? 0 : clamp(timeAvail / (n - 1), TIME_MIN, TIME_MAX);
-  const timeLen = MARGIN_TIME * 2 + Math.max(0, n - 1) * spacing + (h ? TAIL_H : TAIL_TOP + TAIL_BOTTOM);
-  // 时间坐标：横版最新在右；竖版最新在上
-  const timeOf = new Map(commits.map((c, i) => [c.hash, h
-    ? MARGIN_TIME + (n - 1 - i) * spacing
-    : TAIL_TOP + i * spacing]));
-  const xShift = h ? Math.max(0, viewportW - timeLen) : 0;
-  if (h && xShift) for (const [k, v] of timeOf) timeOf.set(k, v + xShift);
+  const timeLen = MARGIN_TIME * 2 + Math.max(0, n - 1) * spacing + TAIL_H;
+  const timeOf = new Map(commits.map((c, i) => [c.hash, MARGIN_TIME + (n - 1 - i) * spacing]));
+  const xShift = Math.max(0, viewportW - timeLen);
+  if (xShift) for (const [k, v] of timeOf) timeOf.set(k, v + xShift);
 
   const chainFrom = (tipHash) => {
     const arr = []; let cur = tipHash, guard = 0;
@@ -271,8 +243,8 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   }
 
   // —— 车道装箱（沿时间轴不重叠的链共享一条车道）——
-  const padNewer = h ? PAD_NEWER_H : PAD_NEWER_V;
-  const padOlder = h ? PAD_OLDER_H : PAD_OLDER_V;
+  const padNewer = PAD_NEWER_H;
+  const padOlder = PAD_OLDER_H;
   const chainT = new Map();
   for (const ch of chains) {
     if (!ch.commits.length) continue;
@@ -294,10 +266,10 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   const exclusiveLanes = new Set();
   for (const ch of order) {
     const { lo, hi } = chainT.get(ch.id);
-    const newer = h ? hi : lo;
-    const older = h ? lo : hi;
-    const loEdge = h ? older - padOlder : newer - padNewer;
-    const hiEdge = h ? newer + padNewer : older + padOlder;
+    const newer = hi;
+    const older = lo;
+    const loEdge = older - padOlder;
+    const hiEdge = newer + padNewer;
     const exclusive = ['main', 'master', 'dev', 'develop'].includes(ch.name);
     let lane = 0;
     while (true) {
@@ -313,9 +285,9 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   const lanes = laneRanges.length;
 
   // —— 车道轴位置 ——
-  const laneAvail = h ? Math.max(viewportH - MARGIN_LANE * 2, 24) : Math.max(viewportW - MARGIN_LANE * 2, 24);
+  const laneAvail = Math.max(viewportH - MARGIN_LANE * 2, 24);
   const laneSize = lanes > 1
-    ? clamp(laneAvail / (lanes - 1), h ? ROW_MIN : COL_MIN, h ? ROW_MAX : COL_MAX)
+    ? clamp(laneAvail / (lanes - 1), ROW_MIN, ROW_MAX)
     : 0;
   const laneLen = Math.max(0, lanes - 1) * laneSize;
   const laneOffset = MARGIN_LANE + Math.max(0, (laneAvail - laneLen) / 2);
@@ -343,13 +315,12 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   };
 
   // —— 坐标映射 ——
-  const svgW = h ? Math.max(viewportW, timeLen) : Math.max(viewportW, MARGIN_LANE * 2 + laneLen);
-  const svgH = h ? Math.max(viewportH, MARGIN_LANE * 2 + laneLen) : Math.max(viewportH, timeLen);
+  const svgW = Math.max(viewportW, timeLen);
+  const svgH = Math.max(viewportH, MARGIN_LANE * 2 + laneLen);
   const pt = (hash, fallbackLane) => {
     const t = timeOf.get(hash) ?? 0;
     const lane = laneOf.has(hash) ? laneOf.get(hash) : fallbackLane;
-    const l = lanePos(lane);
-    return h ? { x: t, y: l } : { x: l, y: t };
+    return { x: t, y: lanePos(lane) };
   };
 
   // —— 边 ——
@@ -363,8 +334,8 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
     c.parents.forEach((p, idx) => {
       if (!inWin.has(p)) {
         if (idx === 0) {
-          const older = h ? { x: cp.x - 18, y: cp.y } : { x: cp.x, y: cp.y + 18 };
-          const near = h ? { x: cp.x - 5, y: cp.y } : { x: cp.x, y: cp.y + 5 };
+          const older = { x: cp.x - 18, y: cp.y };
+          const near = { x: cp.x - 5, y: cp.y };
           edges.push({ kind: 'stub', from: c.hash, chain: chainId, cx: timeOf.get(c.hash), x1: older.x, y1: older.y, x2: near.x, y2: near.y, color });
         }
         return;
@@ -451,10 +422,10 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
     for (const x of [...remoteOnly, ...localOnly]) {
       const t = timeOf.get(x);
       if (divOlder === null) divOlder = t;
-      else divOlder = h ? Math.min(divOlder, t) : Math.max(divOlder, t);
+      else divOlder = Math.min(divOlder, t);
     }
     const localT = timeOf.get(head.hash);
-    const newerT = h ? Math.max(upT, localT) : Math.min(upT, localT);
+    const newerT = Math.max(upT, localT);
     for (const x of uChain) addRing(x, headLane, chainColorOf(head.hash), true, chainOf.get(head.hash));
     const only = new Set(behind === -1 ? uChain : uChain.slice(0, behind));
     const seg = uChain.slice(0, behind === -1 ? uChain.length : behind + 1);
@@ -485,12 +456,12 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
     if (ch.kind !== 'ghost' || !ch.commits.length) continue;
     const lane = laneOfChain.get(ch.id);
     if (lane === undefined) continue;
-    // 横版时间向右增大、竖版向下增大：尖端与最老提交的方向随朝向翻转
+    // 时间向右增大：尖端在最右，最老提交在最左
     let tipHash = ch.commits[0], oldestHash = ch.commits[0];
     for (const x of ch.commits) {
       const t = timeOf.get(x);
-      if (h ? t > timeOf.get(tipHash) : t < timeOf.get(tipHash)) tipHash = x;
-      if (h ? t < timeOf.get(oldestHash) : t > timeOf.get(oldestHash)) oldestHash = x;
+      if (t > timeOf.get(tipHash)) tipHash = x;
+      if (t < timeOf.get(oldestHash)) oldestHash = x;
     }
     const parent = byHash.get(oldestHash).parents[0];
     if (parent && inWin.has(parent)) {
@@ -517,8 +488,8 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
       kind: 'ghostLane', lane, color: ch.color, chain: ch.id,
       points: pts, fullPoints: pts,
       hits: ch.commits.map((x) => ({ hash: x, ...pt(x, lane), subject: byHash.get(x).subject, time: byHash.get(x).time })),
-      ahead: 0, behind: 0, divOlder: h ? Math.min(...pts.map((p) => p.x)) : Math.max(...pts.map((p) => p.y)),
-      newerT: h ? Math.max(...pts.map((p) => p.x)) : Math.min(...pts.map((p) => p.y)),
+      ahead: 0, behind: 0, divOlder: Math.min(...pts.map((p) => p.x)),
+      newerT: Math.max(...pts.map((p) => p.x)),
       txT: timeOf.get(tipHash), lxT: timeOf.get(tipHash), tipT: timeOf.get(tipHash),
     });
   }
@@ -528,22 +499,16 @@ function layout(data, viewportW, viewportH, foldMerged = false) {
   const panels = [];
   for (const ch of remoteChains) {
     if (ch.kind === 'shadow' && ch.ahead === 0 && ch.behind === 0) continue;
-    const older = ch.divOlder ?? (h ? Math.min(ch.newerT, ch.tipT) : Math.max(ch.newerT, ch.tipT));
+    const older = ch.divOlder ?? Math.min(ch.newerT, ch.tipT);
     const newer = ch.newerT;
     const lane = lanePos(ch.lane);
-    if (h) {
-      const x1 = older - thickness / 2;
-      const x2 = newer + thickness / 2;
-      panels.push({ x: x1, y: lane - thickness / 2, w: Math.max(0, x2 - x1), h: thickness, chain: ch.chain });
-    } else {
-      const y1 = newer - thickness / 2;
-      const y2 = older + thickness / 2;
-      panels.push({ x: lane - thickness / 2, y: y1, w: thickness, h: Math.max(0, y2 - y1), chain: ch.chain });
-    }
+    const x1 = older - thickness / 2;
+    const x2 = newer + thickness / 2;
+    panels.push({ x: x1, y: lane - thickness / 2, w: Math.max(0, x2 - x1), h: thickness, chain: ch.chain });
   }
 
   return {
-    commits, timeOf, laneOf, lanePos, laneSize, svgW, svgH, contentW: timeLen, contentH: timeLen,
+    commits, timeOf, laneOf, lanePos, laneSize, svgW, svgH, contentW: timeLen,
     edges, nodes, stats, remoteChains, remoteExtraEdges, remoteBranchStarts, remoteReach,
     remoteRings: [...ringMap.values()], panels, chainOf, chainById,
     locals, current, ghostChains, chainColorOf, laneOfChain, pt,
@@ -572,42 +537,7 @@ const ringEl = (r) => {
   return `<circle class="remote-ring${d}${r.isNew ? ' new' : ''}" cx="${S(r.x)}" cy="${S(r.y)}" r="8" style="stroke:${r.color}"/>`;
 };
 
-// 竖版：长分支名在窄条右缘会被 SVG 裁掉，渲染后按实际宽度平移回可视区；
-// 再从上往下排一次，近距离的两条名字互相让开（上面的整体上移）
-function fitVerticalChips(svgW) {
-  if (!svgW) return;
-  const margin = 3, gap = 6;
-  const items = [];
-  for (const t of document.querySelectorAll('#chips g.chip-v')) {
-    if (getComputedStyle(t).display === 'none') continue;
-    t.removeAttribute('transform');
-    const b = t.getBBox();
-    if (!b.width) continue;
-    let dx = 0;
-    if (b.x < margin) dx = margin - b.x;
-    else if (b.x + b.width > svgW - margin) dx = svgW - margin - (b.x + b.width);
-    if (Math.abs(dx) > 0.5) t.setAttribute('transform', `translate(${S(dx)} 0)`);
-    const r = t.getBoundingClientRect();
-    items.push({ t, dx, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
-  }
-  items.sort((a, b) => b.bottom - a.bottom);
-  const placed = [];
-  for (const it of items) {
-    let dy = 0;
-    for (const p of placed) {
-      if (it.left >= p.right || it.right <= p.left) continue;
-      dy = Math.min(dy, p.top - gap - it.bottom);
-    }
-    if (dy < -0.5) {
-      it.t.setAttribute('transform', `translate(${S(it.dx)} ${S(dy)})`);
-      it.top += dy;
-      it.bottom += dy;
-    }
-    placed.push(it);
-  }
-}
-
-// 横版当前分支锥形标记：放在名字右侧，右半边保持菱形、左半边拉长，即竖版锥形旋转 90°
+// 当前分支锥形标记：放在名字右侧，右半边保持菱形、左半边拉长
 function placeHorizontalCones() {
   const chips = $('#chips');
   if (!chips) return;
@@ -748,40 +678,16 @@ function render(data) {
   }
   $('#rebaseLinks').innerHTML = rebaseHtml.join('');
 
-  // 名字：横版在尖端右侧；竖版在尖端上方
+  // 名字：在尖端右侧
   const chips = [];
   const drawn = new Set();
-  // 竖版按每个 / 分行；横版仍然用 / 连回一整行
+  // 分支名用 / 连成一整行
   const splitName = (name) => String(name).split('/').filter(Boolean);
-  const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '', current = false) => {
+  const chipText = (x, y, lines, color, chainId, extraCls = '', extraHtml = '' ) => {
     const cls = `chip${extraCls}${dim(chainId)}`;
-    if (isH()) {
-      const text = lines.filter(Boolean).join('/');
-      // 横版当前分支的锥形标记在渲染后按文本宽度放置（placeHorizontalCones）
-      return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 22)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
-    }
-    const rows = lines.map((part, i) => (i === 0 ? part : '/' + part));
-    const topBaseline = y - 16 - Math.max(0, rows.length - 1) * 28;
-    let textEl;
-    if (rows.length <= 1) {
-      textEl = `<text class="${cls} chip-v" data-chain="${esc(chainId)}" x="${S(x)}" y="${S(y - 16)}" text-anchor="middle" style="fill:${color}">${esc(rows[0] || '')}${extraHtml}</text>`;
-    } else {
-      // 有几个 / 就分几行：第一行只留前缀，后续每行以 / 开头
-      const spans = rows.map((row, i) => {
-        const baseline = y - 16 - (rows.length - 1 - i) * 28;
-        return `<tspan x="${S(x)}" y="${S(baseline)}">${esc(row)}${i === rows.length - 1 ? extraHtml : ''}</tspan>`;
-      }).join('');
-      textEl = `<text class="${cls} chip-v" data-chain="${esc(chainId)}" text-anchor="middle" style="fill:${color}">${spans}</text>`;
-    }
-    // 竖版当前分支：锥形标记在名字正上方。上半部保持菱形，下半部拉长指向名字。
-    const cone = current ? (() => {
-      const tip = topBaseline - 17;
-      const side = tip - 12;
-      const top = side - 6;
-      const hw = 6.5;
-      return `<path class="chip-cone" d="M ${S(x)} ${S(top)} L ${S(x + hw)} ${S(side)} L ${S(x)} ${S(tip)} L ${S(x - hw)} ${S(side)} Z" style="fill:${color}"/>`;
-    })() : '';
-    return `<g class="chip-v${extraCls}${dim(chainId)}" data-chain="${esc(chainId)}">${cone}${textEl}</g>`;
+    const text = lines.filter(Boolean).join('/');
+    // 当前分支的锥形标记在渲染后按文本宽度放置（placeHorizontalCones）
+    return `<text class="${cls}" data-chain="${esc(chainId)}" x="${S(x + 22)}" y="${S(y + 6.5)}" style="fill:${color}">${esc(text)}${extraHtml}</text>`;
   };
   for (const head of L.locals) {
     const lane = L.laneOf.get(head.hash);
@@ -798,18 +704,9 @@ function render(data) {
     const color = L.chainColorOf(head.hash);
     const chainId = L.chainOf.get(head.hash);
     // 分叉时远端尖端可能更靠“新”一侧，名字放到两者之后，避免盖住远端提交
-    const labelT = st && st.inWindow && st.upT != null
-      ? (isH() ? Math.max(t, st.upT) : Math.min(t, st.upT))
-      : t;
-    const lp = isH() ? { x: labelT, y: p.y } : { x: p.x, y: labelT };
-    // 竖版让位：玻璃带顶边会压住名字；尖端有 tag 时也要给 tag 名留出上方空间
-    if (!isH()) {
-      const panelPad = st && st.inWindow && (st.ahead > 0 || st.behind > 0);
-      const tagPad = tagByHash.has(head.hash);
-      lp.y -= panelPad || tagPad ? 12 : 0;
-    }
+    const labelT = st && st.inWindow && st.upT != null ? Math.max(t, st.upT) : t;
     const localCls = ' chip-local' + (isCur ? ' current' : '');
-    chips.push(chipText(lp.x, lp.y, splitName(head.name), color, chainId, localCls, aliasTxt, isCur));
+    chips.push(chipText(labelT, p.y, splitName(head.name), color, chainId, localCls, aliasTxt));
   }
   // 远端视角按远端 tip 分组：origin/main · origin/dev 指向同一个提交时应落在同一点，
   // 不能各自挂到对应本地分支的车道上（否则 origin/dev 会跑到 dev 的红色车道上）。
@@ -833,17 +730,15 @@ function render(data) {
     names.sort((a, b) => remoteRank(a) - remoteRank(b) || a.localeCompare(b));
     const [first, ...rest] = names;
     const p = L.pt(hash);
-    const padY = !isH() && tagByHash.has(hash) ? 12 : 0;
     const color = L.chainColorOf(hash);
     const chainId = L.chainOf.get(hash);
     const remoteAlias = rest.length
       ? `<tspan class="chip-count" dx="7">· ${esc(rest.join(' · '))}</tspan>`
       : '';
-    chips.push(chipText(p.x, p.y - padY, splitName(first), color, chainId, ' chip-remote', remoteAlias));
+    chips.push(chipText(p.x, p.y, splitName(first), color, chainId, ' chip-remote', remoteAlias));
   }
   for (const g of L.ghostChains) {
-    const padY = !isH() && g.tipHash && tagByHash.has(g.tipHash) ? 12 : 0;
-    chips.push(chipText(g.tipX, g.tipY - padY, splitName(g.name), g.color, g.chain, ' chip-ghost'));
+    chips.push(chipText(g.tipX, g.tipY, splitName(g.name), g.color, g.chain, ' chip-ghost'));
   }
   // tag：三角 + 名称
   for (const [hash, names] of tagByHash) {
@@ -855,17 +750,9 @@ function render(data) {
     const labelW = label.length * 7;
     const minX = 4 + labelW / 2;
     const maxX = L.svgW - 4 - labelW / 2;
-    if (isH()) {
-      // 横版：三角在提交点上方，vX.X.X 在三角上方
-      chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 4.5)},${S(p.y - 20)} ${S(p.x + 4.5)},${S(p.y - 20)} ${S(p.x)},${S(p.y - 13.5)}" style="fill:var(--ink)"/>`);
-      const tx = clamp(p.x, minX, maxX);
-      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 26)}" text-anchor="middle">${esc(label)}</text>`);
-    } else {
-      // 竖版：三角在提交点左侧，vX.X.X 在三角上方
-      chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 20)},${S(p.y - 4.5)} ${S(p.x - 20)},${S(p.y + 4.5)} ${S(p.x - 13.5)},${S(p.y)}" style="fill:var(--ink)"/>`);
-      const tx = clamp(p.x - 16.75, minX, maxX);
-      chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 9)}" text-anchor="middle">${esc(label)}</text>`);
-    }
+    chips.push(`<polygon class="tag-mark${cls}" points="${S(p.x - 4.5)},${S(p.y - 20)} ${S(p.x + 4.5)},${S(p.y - 20)} ${S(p.x)},${S(p.y - 13.5)}" style="fill:var(--ink)"/>`);
+    const tx = clamp(p.x, minX, maxX);
+    chips.push(`<text class="tag-name${cls}" x="${S(tx)}" y="${S(p.y - 26)}" text-anchor="middle">${esc(label)}</text>`);
   }
   // 聚焦：汇入分支的最后一条汇入线起点标名
   if (focusChain) {
@@ -882,8 +769,7 @@ function render(data) {
     }
   }
   $('#chips').innerHTML = chips.join('');
-  if (!isH()) fitVerticalChips(L.svgW);
-  else placeHorizontalCones();
+  placeHorizontalCones();
 
   const tagsAt = (hash) => (tagByHash.get(hash) || []).join(', ');
   const hits = [];
@@ -894,7 +780,7 @@ function render(data) {
   // 被隐藏的已删除分支提交也记为已见，切回完整历史时不会误报“新提交”
   for (const c of data.commits) seen.add(c.hash);
 
-  updateTimeline(L, W, H);
+  updateTimeline(L, W);
   const curRef = data.refs.find((r) => r.current);
   if (curRef) $('#tl-view').style.setProperty('--dot', L.chainColorOf(curRef.hash));
 
@@ -927,29 +813,20 @@ function updateWt(data) {
   }
 }
 
-// —— 时间轴（横：顶部水平；竖：右侧纵向）——
+// —— 时间轴（顶部水平）——
 let tlGeom = { len: 0, view: 0, total: 0 };
-function updateTimeline(L, W, H) {
-  const horizontal = isH();
+function updateTimeline(L, W) {
   // 时间轴虚线用 SVG line 画，避免 WebKitGTK 把 1px repeating-gradient 偶发渲染成实线
   const rule = document.querySelector('#timeline .tl-rule line');
   if (rule) {
-    if (horizontal) {
-      rule.setAttribute('x1', '0'); rule.setAttribute('y1', '50%');
-      rule.setAttribute('x2', '100%'); rule.setAttribute('y2', '50%');
-    } else {
-      rule.setAttribute('x1', '50%'); rule.setAttribute('y1', '0');
-      rule.setAttribute('x2', '50%'); rule.setAttribute('y2', '100%');
-    }
+    rule.setAttribute('x1', '0'); rule.setAttribute('y1', '50%');
+    rule.setAttribute('x2', '100%'); rule.setAttribute('y2', '50%');
   }
-  tlGeom = horizontal
-    ? { len: L.contentW, view: W, total: L.svgW }
-    : { len: L.contentH, view: H, total: L.svgH };
+  tlGeom = { len: L.contentW, view: W, total: L.svgW };
   const scrollable = tlGeom.total - tlGeom.view > 2;
   const el = $('#timeline');
   el.hidden = false;
   el.classList.toggle('static', !scrollable);
-  el.classList.toggle('vertical', !horizontal);
   el.title = scrollable ? '拖动查看历史，实心点是 release / tag' : '历史未超出窗口，无需滚动';
   const marks = [];
   const push = (t, color) => {
@@ -971,34 +848,29 @@ function updateTimeline(L, W, H) {
     const tt = L.timeOf.get(t.hash);
     if (tt !== undefined) push(tt, '#EDE9DE');
   }
-  const pos = horizontal ? 'left' : 'top';
-  $('#tl-marks').innerHTML = marks.map((m) => `<span class="tl-mark" style="${pos}:${(m.r * 100).toFixed(2)}%;background:${m.color}"></span>`).join('');
+  $('#tl-marks').innerHTML = marks.map((m) => `<span class="tl-mark" style="left:${(m.r * 100).toFixed(2)}%;background:${m.color}"></span>`).join('');
   updateTlView();
 }
 function updateTlView() {
-  const horizontal = isH();
   const scroll = $('#scroll');
-  const pos = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+  const pos = scroll.scrollLeft;
   const r = tlGeom.len > 0 ? (pos + tlGeom.view / 2) / tlGeom.len : 0.5;
   const v = $('#tl-view');
-  v.style.left = horizontal ? `${(clamp(r, 0, 1) * 100).toFixed(2)}%` : '50%';
-  v.style.top = horizontal ? '50%' : `${(clamp(r, 0, 1) * 100).toFixed(2)}%`;
+  v.style.left = `${(clamp(r, 0, 1) * 100).toFixed(2)}%`;
+  v.style.top = '50%';
   v.style.transform = 'translate(-50%, -50%) rotate(45deg)';
 }
-function tlSeek(clientX, clientY) {
+function tlSeek(clientX) {
   const el = $('#timeline');
   const rect = el.getBoundingClientRect();
-  const horizontal = isH();
-  let r = horizontal
-    ? clamp((clientX - rect.left) / rect.width, 0, 1)
-    : clamp((clientY - rect.top) / rect.height, 0, 1);
+  let r = clamp((clientX - rect.left) / rect.width, 0, 1);
   for (const m of el.querySelectorAll('.tl-mark')) {
-    const mr = parseFloat(horizontal ? m.style.left : m.style.top) / 100;
+    const mr = parseFloat(m.style.left) / 100;
     if (Math.abs(mr - r) < 0.03) { r = mr; break; }
   }
   const scroll = $('#scroll');
   const target = clamp(r * tlGeom.len - tlGeom.view / 2, 0, Math.max(0, tlGeom.total - tlGeom.view));
-  if (horizontal) scroll.scrollLeft = target; else scroll.scrollTop = target;
+  scroll.scrollLeft = target;
   lastUserScroll = performance.now();
   updateTlView();
 }
@@ -1066,22 +938,12 @@ function setFocus(chain) {
   const scroll = $('#scroll');
   let t = -Infinity;
   for (const hash of ch.commits) t = Math.max(t, lastLayout.timeOf.get(hash) ?? -Infinity);
-  if (isH()) {
-    const viewLeft = scroll.scrollLeft, viewRight = viewLeft + scroll.clientWidth;
-    if (t < viewLeft + 40 || t > viewRight - 40) {
-      const target = clamp(t - scroll.clientWidth * 0.7, 0, Math.max(0, scroll.scrollWidth - scroll.clientWidth));
-      progTarget = target;
-      scroll.scrollLeft = target;
-      lastUserScroll = performance.now();
-    }
-  } else {
-    const viewTop = scroll.scrollTop, viewBottom = viewTop + scroll.clientHeight;
-    if (t < viewTop + 40 || t > viewBottom - 40) {
-      const target = clamp(t - scroll.clientHeight * 0.3, 0, Math.max(0, scroll.scrollHeight - scroll.clientHeight));
-      progTarget = target;
-      scroll.scrollTop = target;
-      lastUserScroll = performance.now();
-    }
+  const viewLeft = scroll.scrollLeft, viewRight = viewLeft + scroll.clientWidth;
+  if (t < viewLeft + 40 || t > viewRight - 40) {
+    const target = clamp(t - scroll.clientWidth * 0.7, 0, Math.max(0, scroll.scrollWidth - scroll.clientWidth));
+    progTarget = target;
+    scroll.scrollLeft = target;
+    lastUserScroll = performance.now();
   }
 }
 function chainEntries(L) {
@@ -1103,12 +965,11 @@ let progTarget = -1;
 function scrollToNewest() {
   if (performance.now() - lastUserScroll < 6000) return;
   const scroll = $('#scroll');
-  const horizontal = isH();
-  const target = horizontal ? Math.max(0, lastLayout.svgW - scroll.clientWidth) : 0;
-  const cur = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+  const target = Math.max(0, lastLayout.svgW - scroll.clientWidth);
+  const cur = scroll.scrollLeft;
   if (Math.abs(cur - target) < 2) return;
   progTarget = target;
-  if (horizontal) scroll.scrollLeft = target; else scroll.scrollTop = target;
+  scroll.scrollLeft = target;
 }
 
 // —— 交互 ——
@@ -1116,8 +977,7 @@ const tip = $('#tip');
 function bindUi() {
   const scroll = $('#scroll');
   scroll.addEventListener('scroll', () => {
-    const horizontal = isH();
-    const pos = horizontal ? scroll.scrollLeft : scroll.scrollTop;
+    const pos = scroll.scrollLeft;
     if (Math.abs(pos - progTarget) > 3) lastUserScroll = performance.now();
     tip.hidden = true;
     const d = $('#detail');
@@ -1130,10 +990,10 @@ function bindUi() {
   tlEl.addEventListener('pointerdown', (e) => {
     tlDrag = true;
     try { tlEl.setPointerCapture(e.pointerId); } catch {}
-    tlSeek(e.clientX, e.clientY);
+    tlSeek(e.clientX);
     e.preventDefault();
   });
-  tlEl.addEventListener('pointermove', (e) => { if (tlDrag) tlSeek(e.clientX, e.clientY); });
+  tlEl.addEventListener('pointermove', (e) => { if (tlDrag) tlSeek(e.clientX); });
   tlEl.addEventListener('pointerup', () => { tlDrag = false; });
   tlEl.addEventListener('pointercancel', () => { tlDrag = false; });
 
@@ -1200,14 +1060,6 @@ function bindUi() {
     setMode(btn.dataset.mode);
   });
 
-  $('#orient').addEventListener('click', () => {
-    setOrientation(isH() ? 'v' : 'h');
-  });
-  $('#orient-toggle').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-orient]');
-    if (btn) setOrientation(btn.dataset.orient);
-  });
-
   window.addEventListener('keydown', (e) => {
     if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     const k = e.key.toLowerCase();
@@ -1230,20 +1082,15 @@ function bindUi() {
       const entries = chainEntries(lastLayout);
       const cur = entries.find((x) => x.id === focusChain);
       if (!cur) return;
-      const horizontal = isH();
-      const prevKey = horizontal ? 'ArrowLeft' : 'ArrowUp';
-      const nextKey = horizontal ? 'ArrowRight' : 'ArrowDown';
-      const laneKeyDown = horizontal ? 'ArrowDown' : 'ArrowRight';
-      const laneKeyUp = horizontal ? 'ArrowUp' : 'ArrowLeft';
-      if (e.key === prevKey || e.key === nextKey) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const same = entries.filter((x) => x.lane === cur.lane).sort((a, b) => a.t - b.t);
         const i = same.findIndex((x) => x.id === cur.id);
-        const j = i + (e.key === prevKey ? -1 : 1);
+        const j = i + (e.key === 'ArrowLeft' ? -1 : 1);
         if (i >= 0 && j >= 0 && j < same.length) setFocus(same[j].id);
-      } else if (e.key === laneKeyDown || e.key === laneKeyUp) {
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         const lanes = [...new Set(entries.map((x) => x.lane))].sort((a, b) => a - b);
         const i = lanes.indexOf(cur.lane);
-        const j = i + (e.key === laneKeyDown ? 1 : -1);
+        const j = i + (e.key === 'ArrowDown' ? 1 : -1);
         if (j < 0 || j >= lanes.length) return;
         const candidates = entries.filter((x) => x.lane === lanes[j]);
         candidates.sort((a, b) => Math.abs(a.t - cur.t) - Math.abs(b.t - cur.t));
@@ -1354,69 +1201,16 @@ function bindUi() {
     resizeTimer = setTimeout(() => { if (lastData) render(lastData); }, 80);
   });
 
-  // 竖版左右边缘拖拽调宽（WebView 无边框窗口没有系统 resize 边）
-  const bindResize = (selector, direction) => {
-    const el = $(selector);
-    if (!el) return;
-    el.addEventListener('pointerdown', (e) => {
-      if (!isTauri || !document.documentElement.classList.contains('tauri-linux')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const inv = (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)
-        || (window.__TAURI__ && (window.__TAURI__.core?.invoke || window.__TAURI__.invoke));
-      if (inv) inv('plugin:window|start_resize_dragging', { direction }).catch((err) => console.error(err));
-    });
-  };
-  bindResize('#resize-e', 'East');
-  bindResize('#resize-w', 'West');
-
-  placeTimeline();
-  updateOrientButton();
   setMode(document.documentElement.dataset.mode || 'local');
 }
 
-function placeTimeline() {
-  const tl = $('#timeline');
-  if (isH()) document.querySelector('header').insertBefore(tl, document.querySelector('.h-right'));
-  else $('#graph').appendChild(tl);
-}
 function setFold(next) {
   foldMerged = !!next;
   if (lastData) render(lastData);
   showNotice(foldMerged ? '已隐藏已删除分支' : '已显示已删除分支');
 }
-// 供 Linux 托盘菜单通过 eval 调用
+// 供 Linux/macOS 托盘菜单通过 eval 调用
 window.__gittySetFold = setFold;
-function updateOrientButton() {
-  const btn = $('#orient');
-  if (btn) {
-    btn.textContent = isH() ? '竖' : '横';
-    btn.title = isH() ? '切换到竖版' : '切换到横版';
-  }
-  const toggle = $('#orient-toggle');
-  if (!toggle) return;
-  toggle.dataset.active = orientation;
-  toggle.querySelectorAll('button[data-orient]').forEach((b) => {
-    const on = b.dataset.orient === orientation;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-pressed', String(on));
-  });
-}
-function setOrientation(next) {
-  orientation = next;
-  try { localStorage.setItem('gitty-orient', next); } catch {}
-  document.documentElement.dataset.orient = next;
-  placeTimeline();
-  updateOrientButton();
-  if (isTauri) {
-    const api = window.__TAURI__;
-    const inv = api && (api.core?.invoke || api.invoke);
-    if (inv) inv('set_orientation', { orientation: next }).catch((e) => console.error(e));
-  }
-  if (lastData) render(lastData);
-}
-// 供 Linux 托盘菜单通过 eval 调用
-window.__gittySetOrientation = setOrientation;
 
 function setMode(mode) {
   document.documentElement.dataset.mode = mode;
@@ -1427,8 +1221,6 @@ function setMode(mode) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', String(on));
   });
-  // 两套视角的名字靠 CSS 显隐，切换后重新量一次宽度
-  if (!isH() && lastLayout) requestAnimationFrame(() => fitVerticalChips(lastLayout.svgW));
 }
 
 async function refresh() {
@@ -1468,16 +1260,8 @@ async function refresh() {
 }
 
 bindUi();
-// Linux 首次 map 后 WM 可能覆盖掉窗口尺寸，页面加载完再确认一次当前方向；
-// Windows/macOS 维持原来的「仅竖版启动时重新定位」行为。
-const isLinuxTauri = document.documentElement.classList.contains('tauri-linux');
-if (isTauri && (orientation === 'v' || isLinuxTauri)) {
-  const api = window.__TAURI__;
-  const inv = api && (api.core?.invoke || api.invoke);
-  if (inv) inv('set_orientation', { orientation }).catch(() => {});
-}
-// 同步系统托盘里的“隐藏已删除分支”勾选状态
-if (isTauri && isLinuxTauri) {
+// 同步系统托盘里的“隐藏已删除分支”勾选状态（Linux/macOS）
+if (isTauri && (isLinuxTauri || isMacTauri)) {
   const api = window.__TAURI__;
   const inv = api && (api.core?.invoke || api.invoke);
   if (inv) {

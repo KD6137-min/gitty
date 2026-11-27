@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Fetch the official Node.js runtime used as the Linux sidecar.
+# Fetch the official Node.js runtime used as the desktop sidecar (Linux/macOS).
 # The binary is not committed; run this once before `tauri build`.
 set -euo pipefail
 
 VERSION="${NODE_VERSION:-20.20.2}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-case "$(uname -m)" in
-  x86_64)  ARCH="x64";   TRIPLE="x86_64-unknown-linux-gnu" ;;
-  aarch64) ARCH="arm64"; TRIPLE="aarch64-unknown-linux-gnu" ;;
-  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64)  PLATFORM="linux-x64";    TRIPLE="x86_64-unknown-linux-gnu" ;;
+  Linux:aarch64) PLATFORM="linux-arm64";  TRIPLE="aarch64-unknown-linux-gnu" ;;
+  Darwin:arm64)  PLATFORM="darwin-arm64"; TRIPLE="aarch64-apple-darwin" ;;
+  Darwin:x86_64) PLATFORM="darwin-x64";   TRIPLE="x86_64-apple-darwin" ;;
+  *) echo "unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
 DEST="$ROOT/src-tauri/binaries/gitty-node-$TRIPLE"
@@ -21,14 +23,19 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-ARCHIVE="node-v${VERSION}-linux-${ARCH}.tar.xz"
+ARCHIVE="node-v${VERSION}-${PLATFORM}.tar.xz"
 BASE="https://nodejs.org/dist/v${VERSION}"
-echo "downloading Node.js v${VERSION} (${ARCH})..."
+echo "downloading Node.js v${VERSION} (${PLATFORM})..."
 curl -fsSL "$BASE/$ARCHIVE" -o "$TMP/$ARCHIVE"
 curl -fsSL "$BASE/SHASUMS256.txt" -o "$TMP/SHASUMS256.txt"
-(cd "$TMP" && grep "  $ARCHIVE\$" SHASUMS256.txt | sha256sum -c -)
+if command -v sha256sum >/dev/null 2>&1; then
+  CHECK=(sha256sum -c -)
+else
+  CHECK=(shasum -a 256 -c -)
+fi
+(cd "$TMP" && grep "  $ARCHIVE\$" SHASUMS256.txt | "${CHECK[@]}")
 
 tar -xJf "$TMP/$ARCHIVE" -C "$TMP"
 mkdir -p "$(dirname "$DEST")"
-install -m 755 "$TMP/node-v${VERSION}-linux-${ARCH}/bin/node" "$DEST"
+install -m 755 "$TMP/node-v${VERSION}-${PLATFORM}/bin/node" "$DEST"
 echo "installed Node sidecar: $DEST"

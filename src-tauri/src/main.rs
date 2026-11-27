@@ -5,21 +5,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-#[cfg(target_os = "linux")]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const BAR_HEIGHT: f64 = 315.0;
-const BAR_WIDTH: f64 = 315.0;
 
-/// Linux 当前朝向：拖拽吸附和重新定位时要用。
-#[cfg(target_os = "linux")]
-static LINUX_VERTICAL: AtomicBool = AtomicBool::new(false);
 /// 连续 Moved 事件的代次，只对最后一次移动做吸附。
 #[cfg(target_os = "linux")]
 static LINUX_MOVE_GEN: AtomicU64 = AtomicU64::new(0);
-/// 窗口宽度拖拽结束后的保存代次。
-#[cfg(target_os = "linux")]
-static LINUX_RESIZE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// 连续 Moved 事件的代次，只对最后一次移动做吸附。
+#[cfg(target_os = "macos")]
+static MACOS_MOVE_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// 随应用启动的 Node 服务；退出时杀掉，避免留下占用 4173 的孤儿进程。
 struct ServerProcess(std::sync::Mutex<Option<std::process::Child>>);
@@ -93,23 +90,29 @@ fn node_binary() -> PathBuf {
     PathBuf::from("node")
 }
 
-/// Linux release 包里的 Node sidecar。开发/未打包时返回 None，回退到系统 node。
+/// Linux/macOS release 包里的 Node sidecar。开发/未打包时返回 None，回退到系统 node。
 /// Tauri 会把 externalBin 安装到可执行文件旁或资源目录；两处都查。
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn sidecar_node(root: &Path) -> Option<PathBuf> {
-    let mut candidates = vec![
-        root.join("gitty-node"),
-        root.join("gitty-node-x86_64-unknown-linux-gnu"),
-        root.join("gitty-node-aarch64-unknown-linux-gnu"),
-    ];
+    let triples: &[&str] = if cfg!(target_os = "macos") {
+        &["aarch64-apple-darwin", "x86_64-apple-darwin"]
+    } else {
+        &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+    };
+    let mut candidates = vec![root.join("gitty-node")];
+    for triple in triples {
+        candidates.push(root.join(format!("gitty-node-{triple}")));
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("gitty-node"));
-            candidates.push(dir.join("gitty-node-x86_64-unknown-linux-gnu"));
-            candidates.push(dir.join("gitty-node-aarch64-unknown-linux-gnu"));
+            for triple in triples {
+                candidates.push(dir.join(format!("gitty-node-{triple}")));
+            }
             if let Some(prefix) = dir.parent() {
                 candidates.push(prefix.join("lib/Gitty/gitty-node"));
                 candidates.push(prefix.join("lib/gitty/gitty-node"));
+                candidates.push(prefix.join("Resources/gitty-node"));
             }
         }
     }
@@ -127,11 +130,11 @@ fn spawn_server(
         return None;
     }
     let mut cmd = std::process::Command::new({
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             sidecar_node(root).unwrap_or_else(node_binary)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             node_binary()
         }
@@ -251,48 +254,6 @@ fn apply_bar(hwnd_addr: isize, scale: f64) {
     });
 }
 
-/// 前端切换横/竖版：横向=底部全宽横条，竖向=左侧全高竖条
-#[tauri::command]
-fn set_orientation(window: tauri::WebviewWindow, orientation: String) {
-    #[cfg(windows)]
-    {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = window.window_handle() {
-            if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                let addr = h.hwnd.get();
-                let scale = window.scale_factor().unwrap_or(1.0);
-                if let Some((left, top, right, bottom)) = work_area() {
-                    let bar_h = (BAR_HEIGHT * scale).round() as i32;
-                    let bar_w = (BAR_WIDTH * scale).round() as i32;
-                    let (x, y, w, hh) = if orientation == "v" {
-                        (left.round() as i32, top.round() as i32, bar_w, (bottom - top).round() as i32)
-                    } else {
-                        (left.round() as i32, bottom.round() as i32 - bar_h, (right - left).round() as i32, bar_h)
-                    };
-                    place(addr, x, y, w, hh);
-                }
-            }
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let vertical = orientation == "v";
-        let win = window.clone();
-        let _ = window.run_on_main_thread(move || place_macos(&win, vertical));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let vertical = orientation == "v";
-        LINUX_VERTICAL.store(vertical, Ordering::SeqCst);
-        let win = window.clone();
-        let _ = window.run_on_main_thread(move || place_linux_current(&win, vertical));
-    }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (window, orientation);
-    }
-}
-
 /// 只把窗口压回 z 序最底，不改位置和大小（点击后调用，平时不调用，避免闪烁）
 #[cfg(windows)]
 fn set_bottom(hwnd_addr: isize) {
@@ -324,50 +285,228 @@ fn set_bottom(hwnd_addr: isize) {
     }
 }
 
-/// macOS：把窗口铺到主屏可用区域（NSScreen.visibleFrame，已扣掉菜单栏和 Dock）。
-/// 横向贴底（全宽 × BAR_HEIGHT），竖向贴左（BAR_WIDTH × 全高）。
+/// macOS 上的一块显示器（Cocoa 全局坐标，原点在主屏左下角）。
 #[cfg(target_os = "macos")]
-fn place_macos(window: &tauri::WebviewWindow, vertical: bool) {
-    use objc2::MainThreadMarker;
+#[derive(Clone)]
+struct MacScreen {
+    name: String,
+    frame: objc2_foundation::NSRect,
+    visible: objc2_foundation::NSRect,
+}
+
+#[cfg(target_os = "macos")]
+fn mac_screens(mtm: objc2::MainThreadMarker) -> Vec<MacScreen> {
+    use objc2_app_kit::NSScreen;
+
+    NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| MacScreen {
+            name: screen.localizedName().to_string(),
+            frame: screen.frame(),
+            visible: screen.visibleFrame(),
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn mac_rect_contains(rect: objc2_foundation::NSRect, x: f64, y: f64) -> bool {
+    x >= rect.origin.x
+        && x < rect.origin.x + rect.size.width
+        && y >= rect.origin.y
+        && y < rect.origin.y + rect.size.height
+}
+
+/// 选择显示器：优先按保存的名称，其次按坐标所在屏，最后退回主屏。
+#[cfg(target_os = "macos")]
+fn mac_screen_for(
+    mtm: objc2::MainThreadMarker,
+    name: Option<&str>,
+    point: Option<(f64, f64)>,
+) -> Option<MacScreen> {
+    use objc2_app_kit::NSScreen;
+
+    let screens = mac_screens(mtm);
+    if let Some(name) = name.filter(|name| !name.is_empty()) {
+        if let Some(found) = screens.iter().find(|screen| screen.name == name) {
+            return Some(found.clone());
+        }
+    }
+    if let Some((px, py)) = point {
+        if let Some(found) = screens
+            .iter()
+            .find(|screen| mac_rect_contains(screen.frame, px, py))
+        {
+            return Some(found.clone());
+        }
+        if let Some((found, _)) = screens
+            .iter()
+            .map(|screen| {
+                let cx = screen.frame.origin.x + screen.frame.size.width / 2.0;
+                let cy = screen.frame.origin.y + screen.frame.size.height / 2.0;
+                (screen, (cx - px).powi(2) + (cy - py).powi(2))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            return Some(found.clone());
+        }
+    }
+    if let Some(main) = NSScreen::mainScreen(mtm) {
+        let name = main.localizedName().to_string();
+        if let Some(found) = screens.iter().find(|screen| screen.name == name) {
+            return Some(found.clone());
+        }
+    }
+    screens.first().cloned()
+}
+
+#[cfg(target_os = "macos")]
+fn mac_state_file(window: &tauri::WebviewWindow, name: &str) -> Option<PathBuf> {
+    window
+        .app_handle()
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(name))
+}
+
+#[cfg(target_os = "macos")]
+fn mac_read_state(window: &tauri::WebviewWindow, name: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(mac_state_file(window, name)?).ok()?;
+    let raw = raw.trim().to_string();
+    (!raw.is_empty()).then_some(raw)
+}
+
+#[cfg(target_os = "macos")]
+fn mac_write_state(window: &tauri::WebviewWindow, name: &str, value: &str) {
+    let Some(path) = mac_state_file(window, name) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, value);
+}
+
+/// 吸附边：top / bottom，记住上次的位置。
+#[cfg(target_os = "macos")]
+fn mac_h_edge(window: &tauri::WebviewWindow) -> String {
+    let raw = mac_read_state(window, ".window-edge").unwrap_or_default();
+    if raw.split_whitespace().next() == Some("top") {
+        "top".to_string()
+    } else {
+        "bottom".to_string()
+    }
+}
+
+/// 把窗口摆到指定显示器的工作区边缘（全宽 × BAR_HEIGHT），并记住显示器与吸附边。
+#[cfg(target_os = "macos")]
+fn apply_macos_geometry(window: &tauri::WebviewWindow, screen: &MacScreen) {
     use objc2_app_kit::{
-        NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSScreen, NSWindow,
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSWindow,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-    let Some(mtm) = MainThreadMarker::new() else { return };
-    let Some(screen) = NSScreen::mainScreen(mtm) else { return };
-    let visible = screen.visibleFrame();
+    let visible = screen.visible;
+    if visible.size.width <= 0.0 || visible.size.height <= 0.0 {
+        return;
+    }
     let Ok(ns_window) = window.ns_window() else { return };
-    if ns_window.is_null() || visible.size.width <= 0.0 || visible.size.height <= 0.0 {
+    if ns_window.is_null() {
         return;
     }
 
-    let (width, height) = if vertical {
-        (BAR_WIDTH.min(visible.size.width), visible.size.height)
+    let h_edge = mac_h_edge(window);
+    let height = BAR_HEIGHT.min(visible.size.height);
+    let y = if h_edge == "top" {
+        visible.origin.y + visible.size.height - height
     } else {
-        (visible.size.width, BAR_HEIGHT.min(visible.size.height))
+        visible.origin.y
     };
     let frame = NSRect {
         origin: NSPoint {
             x: visible.origin.x,
-            y: visible.origin.y,
+            y,
         },
-        size: NSSize { width, height },
+        size: NSSize {
+            width: visible.size.width,
+            height,
+        },
     };
+
     // 比普通窗口低一层（-1）：普通窗口始终盖在它上面，但它能接收点击。
     // 更低的桌面层级会被 Finder 桌面窗口吞掉鼠标事件。
     let level: objc2_app_kit::NSWindowLevel = -1;
 
-    // SAFETY: ns_window 是 Tauri 返回的有效 NSWindow 指针，且 setup 运行在主线程。
+    // SAFETY: ns_window 是 Tauri 返回的有效 NSWindow 指针，且调用方保证在主线程。
     unsafe {
         let ns_window = &*(ns_window as *const NSWindow);
         // 强制深色外观，否则浅色系统下 HUD 毛玻璃会发白、灰字看不清
         if let Some(appearance) = NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua) {
             ns_window.setAppearance(Some(&appearance));
         }
-        ns_window.setFrame_display(frame, true);
+        let current = ns_window.frame();
+        let unchanged = (current.origin.x - frame.origin.x).abs() < 0.5
+            && (current.origin.y - frame.origin.y).abs() < 0.5
+            && (current.size.width - frame.size.width).abs() < 0.5
+            && (current.size.height - frame.size.height).abs() < 0.5;
+        if !unchanged {
+            ns_window.setFrame_display(frame, true);
+        }
         ns_window.setLevel(level);
     }
+    mac_write_state(window, ".window-screen", &screen.name);
+    // 让前端根据吸附边调整圆角/投影；页面还没加载时忽略错误，稍后的 invoke 会再设置
+    let _ = window.eval(&format!(
+        "document.documentElement.dataset.hEdge='{h_edge}'"
+    ));
+}
+
+/// 启动时用上次记住的显示器；没有记录就用主屏。
+#[cfg(target_os = "macos")]
+fn place_macos_saved(window: &tauri::WebviewWindow) {
+    use objc2::MainThreadMarker;
+
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let saved = mac_read_state(window, ".window-screen");
+    if let Some(screen) = mac_screen_for(mtm, saved.as_deref(), None) {
+        apply_macos_geometry(window, &screen);
+    }
+}
+
+/// 拖拽结束后：按窗口中心落在显示器的哪一半，决定贴 top / bottom，
+/// 记住该方向后再吸附。
+#[cfg(target_os = "macos")]
+fn place_macos_after_drag(window: &tauri::WebviewWindow) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSWindow;
+
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Ok(ptr) = window.ns_window() else { return };
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: 指针由 Tauri 返回，调用方保证在主线程；只读取 frame。
+    let frame = unsafe { &*(ptr as *const NSWindow) }.frame();
+    let cx = frame.origin.x + frame.size.width / 2.0;
+    let cy = frame.origin.y + frame.size.height / 2.0;
+    let Some(screen) = mac_screen_for(mtm, None, Some((cx, cy))) else { return };
+    let mid_y = screen.frame.origin.y + screen.frame.size.height / 2.0;
+    // Cocoa 的 y 轴向上：窗口中心高于屏幕中线时吸附到顶部
+    let h_edge = if cy > mid_y { "top" } else { "bottom" };
+    mac_write_state(window, ".window-edge", h_edge);
+    apply_macos_geometry(window, &screen);
+}
+
+/// Moved 事件去抖：只在最后一次移动 600ms 后吸附，避免拖动过程中不断重排。
+#[cfg(target_os = "macos")]
+fn schedule_macos_snap(window: tauri::WebviewWindow) {
+    let generation = MACOS_MOVE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(600));
+        if MACOS_MOVE_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let win = window.clone();
+        let _ = window.run_on_main_thread(move || place_macos_after_drag(&win));
+    });
 }
 
 /// Linux/X11 上的一块显示器（RandR 根窗口坐标）。
@@ -494,7 +633,7 @@ fn linux_work_area_for(
         .or_else(|| monitors.first())?;
 
     // _NET_WORKAREA 是整个根窗口的单一矩形；GNOME 的顶部面板只在主屏。
-    // 把它套到非主屏会把副屏顶部也切掉，竖版就填不满高度，所以非主屏用完整显示器矩形。
+    // 把它套到非主屏会把副屏边缘也切掉，所以非主屏直接使用完整显示器矩形。
     if !chosen.primary {
         return Some((
             chosen.name.clone(),
@@ -550,42 +689,7 @@ fn save_monitor(window: &tauri::WebviewWindow, name: &str) {
     let _ = std::fs::write(path, name);
 }
 
-/// 竖版宽度（物理像素）存在应用数据目录；默认取所在显示器工作区的一半。
-#[cfg(target_os = "linux")]
-fn linux_width_file(window: &tauri::WebviewWindow) -> Option<PathBuf> {
-    window
-        .app_handle()
-        .path()
-        .app_data_dir()
-        .ok()
-        .map(|dir| dir.join(".window-width"))
-}
-
-#[cfg(target_os = "linux")]
-fn read_saved_width(window: &tauri::WebviewWindow) -> Option<i32> {
-    let raw = std::fs::read_to_string(linux_width_file(window)?).ok()?;
-    raw.trim().parse::<i32>().ok().filter(|w| *w > 0)
-}
-
-#[cfg(target_os = "linux")]
-fn save_vertical_width(window: &tauri::WebviewWindow, width: i32) {
-    let Some(path) = linux_width_file(window) else { return };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(path, width.to_string());
-}
-
-#[cfg(target_os = "linux")]
-fn linux_vertical_width(window: &tauri::WebviewWindow, monitor_w: i32, scale: f64) -> i32 {
-    let min = (BAR_WIDTH * scale).round() as i32;
-    // 竖版默认半屏，最宽也只到所在显示器工作区的一半
-    let max = (monitor_w / 2).max(min);
-    let saved = read_saved_width(window).unwrap_or(max);
-    saved.clamp(min, max)
-}
-
-/// 吸附边：横版 top/bottom，竖版 left/right，分别记住。
+/// 吸附边：top / bottom，记住上次的位置。
 #[cfg(target_os = "linux")]
 fn linux_edge_file(window: &tauri::WebviewWindow) -> Option<PathBuf> {
     window
@@ -597,23 +701,24 @@ fn linux_edge_file(window: &tauri::WebviewWindow) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_edges(window: &tauri::WebviewWindow) -> (String, String) {
+fn read_h_edge(window: &tauri::WebviewWindow) -> String {
     let raw = linux_edge_file(window)
         .and_then(|path| std::fs::read_to_string(path).ok())
         .unwrap_or_default();
-    let mut parts = raw.split_whitespace();
-    let h = if parts.next() == Some("top") { "top" } else { "bottom" };
-    let v = if parts.next() == Some("right") { "right" } else { "left" };
-    (h.to_string(), v.to_string())
+    if raw.split_whitespace().next() == Some("top") {
+        "top".to_string()
+    } else {
+        "bottom".to_string()
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn save_edges(window: &tauri::WebviewWindow, h_edge: &str, v_edge: &str) {
+fn save_h_edge(window: &tauri::WebviewWindow, h_edge: &str) {
     let Some(path) = linux_edge_file(window) else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, format!("{h_edge} {v_edge}"));
+    let _ = std::fs::write(path, h_edge);
 }
 
 /// “隐藏已删除分支”状态（系统托盘和前端共用），存在应用数据目录，默认隐藏。
@@ -669,7 +774,7 @@ fn lower_linux(window: &tauri::WebviewWindow) {
 }
 
 /// Linux/X11：直接改客户窗口的几何，并清掉 GTK 可能留下的 min/max 尺寸提示。
-/// Tauri/GTK 的 resizable 约束会阻止横/竖切换时改宽度，所以这里绕开它。
+/// Tauri/GTK 的 resizable 约束会阻止窗口管理器之外改尺寸，所以这里绕开它。
 #[cfg(target_os = "linux")]
 fn set_geometry_linux(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -699,12 +804,10 @@ fn set_geometry_linux(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: 
     }
 }
 
-/// Linux/X11：把窗口摆到指定显示器的工作区边缘。
-/// 横版贴底（全宽 × 6cm），竖版贴左（6cm × 全高）。
+/// Linux/X11：把窗口摆到指定显示器的工作区边缘（全宽 × 6cm）。
 #[cfg(target_os = "linux")]
 fn apply_linux_geometry(
     window: &tauri::WebviewWindow,
-    vertical: bool,
     monitor: &str,
     x: i32,
     y: i32,
@@ -714,82 +817,69 @@ fn apply_linux_geometry(
     if w <= 0 || h <= 0 {
         return;
     }
-    LINUX_VERTICAL.store(vertical, Ordering::SeqCst);
     let scale = window.scale_factor().unwrap_or(1.0);
     let bar_h = (BAR_HEIGHT * scale).round() as i32;
-    let (h_edge, v_edge) = read_edges(window);
-    let (px, py, pw, ph) = if vertical {
-        let pw = linux_vertical_width(window, w, scale).min(w);
-        let px = if v_edge == "right" { x + w - pw } else { x };
-        (px, y, pw, h)
-    } else {
-        let ph = bar_h.min(h);
-        let py = if h_edge == "top" { y } else { y + h - ph };
-        (x, py, w, ph)
-    };
-    let pw = pw.max(1) as u32;
+    let h_edge = read_h_edge(window);
+    let ph = bar_h.min(h);
+    let py = if h_edge == "top" { y } else { y + h - ph };
     let ph = ph.max(1) as u32;
     let unchanged = window
         .outer_position()
         .ok()
         .zip(window.outer_size().ok())
-        .map(|(p, s)| p.x == px && p.y == py && s.width == pw && s.height == ph)
+        .map(|(p, s)| p.x == x && p.y == py && s.width == w as u32 && s.height == ph)
         .unwrap_or(false);
     if !unchanged {
-        set_geometry_linux(window, px, py, pw, ph);
+        set_geometry_linux(window, x, py, w.max(1) as u32, ph);
     }
     save_monitor(window, monitor);
-    // 让前端根据吸附边调整圆角/投影；页面还没加载时忽略错误，稍后的 invoke 会再设置
+    // 让前端根据吸附边调整圆角/投影；页面还没加载时忽略错误，稍后的调用会再设置
     let _ = window.eval(&format!(
-        "document.documentElement.dataset.hEdge='{h_edge}';document.documentElement.dataset.vEdge='{v_edge}';"
+        "document.documentElement.dataset.hEdge='{h_edge}'"
     ));
     lower_linux(window);
 }
 
 /// 启动时用上次记住的显示器；没有记录就用主屏。
 #[cfg(target_os = "linux")]
-fn place_linux_saved(window: &tauri::WebviewWindow, vertical: bool) {
+fn place_linux_saved(window: &tauri::WebviewWindow) {
     let saved = read_saved_monitor(window);
     if let Some((monitor, x, y, w, h)) = linux_work_area_for(saved.as_deref(), None) {
-        apply_linux_geometry(window, vertical, &monitor, x, y, w, h);
+        apply_linux_geometry(window, &monitor, x, y, w, h);
     }
 }
 
-/// 按窗口当前中心所在显示器吸附；拖动结束后调用。
+/// 按窗口当前中心所在显示器吸附；拖拽结束后调用。
 #[cfg(target_os = "linux")]
-fn place_linux_current(window: &tauri::WebviewWindow, vertical: bool) {
+fn place_linux_current(window: &tauri::WebviewWindow) {
     let point = window
         .outer_position()
         .ok()
         .zip(window.outer_size().ok())
         .map(|(p, s)| (p.x + s.width as i32 / 2, p.y + s.height as i32 / 2));
     if let Some((monitor, x, y, w, h)) = linux_work_area_for(None, point) {
-        apply_linux_geometry(window, vertical, &monitor, x, y, w, h);
+        apply_linux_geometry(window, &monitor, x, y, w, h);
     }
 }
 
-/// 拖动结束后：按窗口中心落在显示器的哪一半，决定贴 top/bottom（横版）
-/// 或 left/right（竖版），记住该方向后再吸附。
+/// 拖动结束后：按窗口中心落在显示器的哪一半，决定贴 top / bottom，
+/// 记住该方向后再吸附。
 #[cfg(target_os = "linux")]
-fn place_linux_after_drag(window: &tauri::WebviewWindow, vertical: bool) {
+fn place_linux_after_drag(window: &tauri::WebviewWindow) {
     let pos = window.outer_position().ok();
     let size = window.outer_size().ok();
     let point = pos
         .zip(size)
         .map(|(p, s)| (p.x + s.width as i32 / 2, p.y + s.height as i32 / 2));
     let Some((monitor, x, y, w, h)) = linux_work_area_for(None, point) else { return };
-    let (mut h_edge, mut v_edge) = read_edges(window);
-    if let (Some(p), Some(s)) = (pos, size) {
-        let cx = p.x + s.width as i32 / 2;
+    let h_edge = if let (Some(p), Some(s)) = (pos, size) {
         let cy = p.y + s.height as i32 / 2;
-        if vertical {
-            v_edge = if cx < x + w / 2 { "left" } else { "right" }.to_string();
-        } else {
-            h_edge = if cy < y + h / 2 { "top" } else { "bottom" }.to_string();
-        }
-    }
-    save_edges(window, &h_edge, &v_edge);
-    apply_linux_geometry(window, vertical, &monitor, x, y, w, h);
+        if cy < y + h / 2 { "top" } else { "bottom" }
+    } else {
+        return;
+    };
+    save_h_edge(window, h_edge);
+    apply_linux_geometry(window, &monitor, x, y, w, h);
 }
 
 /// Moved 事件去抖：只在最后一次移动 600ms 后吸附，避免拖动过程中不断重排。
@@ -802,34 +892,7 @@ fn schedule_linux_snap(window: tauri::WebviewWindow) {
             return;
         }
         let win = window.clone();
-        let _ = window.run_on_main_thread(move || {
-            let vertical = LINUX_VERTICAL.load(Ordering::SeqCst);
-            place_linux_after_drag(&win, vertical);
-        });
-    });
-}
-
-/// Resized 去抖：记住用户拖出来的竖版宽度。
-#[cfg(target_os = "linux")]
-fn schedule_linux_width_save(window: tauri::WebviewWindow) {
-    if !LINUX_VERTICAL.load(Ordering::SeqCst) {
-        return;
-    }
-    let generation = LINUX_RESIZE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(350));
-        if LINUX_RESIZE_GEN.load(Ordering::SeqCst) != generation {
-            return;
-        }
-        let win = window.clone();
-        let _ = window.run_on_main_thread(move || {
-            if !LINUX_VERTICAL.load(Ordering::SeqCst) {
-                return;
-            }
-            if let Ok(size) = win.outer_size() {
-                save_vertical_width(&win, size.width as i32);
-            }
-        });
+        let _ = window.run_on_main_thread(move || place_linux_after_drag(&win));
     });
 }
 
@@ -871,15 +934,25 @@ fn tray_diamond_icon(fill: Option<(u8, u8, u8)>) -> tauri::image::Image<'static>
 /// macOS 菜单栏图标：附件应用没有 Dock 图标和窗口装饰，用它来显示/隐藏/退出。
 #[cfg(target_os = "macos")]
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    use tauri::menu::MenuBuilder;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tauri::menu::{CheckMenuItemBuilder, MenuBuilder};
     use tauri::tray::TrayIconBuilder;
 
+    let folded = read_fold(app.handle());
+    let history = CheckMenuItemBuilder::with_id("hide-deleted", "隐藏已删除分支")
+        .checked(folded)
+        .build(app.handle())?;
     let menu = MenuBuilder::new(app.handle())
         .text("show", "显示 Gitty")
         .text("hide", "隐藏 Gitty")
         .separator()
+        .item(&history)
+        .separator()
         .text("quit", "退出 Gitty")
         .build()?;
+
+    let fold_state = AtomicBool::new(folded);
+    let history_item = history.clone();
 
     TrayIconBuilder::with_id("gitty-tray")
         .icon(tray_diamond_icon(None))
@@ -887,7 +960,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .tooltip("Gitty — 显示 / 隐藏 / 退出")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id().as_ref() {
+        .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -899,7 +972,21 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                     let _ = window.hide();
                 }
             }
-            "quit" => app.exit(0),
+            "history" | "hide-deleted" => {
+                let next = !fold_state.load(Ordering::SeqCst);
+                fold_state.store(next, Ordering::SeqCst);
+                let _ = history_item.set_checked(next);
+                write_fold(app, next);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!(
+                        "window.__gittySetFold && window.__gittySetFold({next})"
+                    ));
+                }
+            }
+            "quit" => {
+                cleanup_server(app);
+                app.exit(0);
+            }
             _ => {}
         })
         .build(app.handle())?;
@@ -961,9 +1048,6 @@ fn setup_linux_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .text("show", "显示 Gitty")
         .text("hide", "隐藏 Gitty")
         .separator()
-        .text("orient-h", "横版")
-        .text("orient-v", "竖版")
-        .separator()
         .item(&history)
         .separator()
         .text("quit", "退出 Gitty")
@@ -974,7 +1058,7 @@ fn setup_linux_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("gitty-tray")
         .icon(tray_diamond_icon(Some((255, 107, 85)))) // #FF6B55
-        .tooltip("Gitty — 显示 / 隐藏 / 横竖 / 退出")
+        .tooltip("Gitty — 显示 / 隐藏 / 退出")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id().as_ref() {
@@ -987,14 +1071,6 @@ fn setup_linux_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "hide" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
-                }
-            }
-            "orient-h" | "orient-v" => {
-                let next = if event.id().as_ref() == "orient-v" { "v" } else { "h" };
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.eval(&format!(
-                        "window.__gittySetOrientation && window.__gittySetOrientation('{next}')"
-                    ));
                 }
             }
             "history" | "hide-deleted" => {
@@ -1032,7 +1108,7 @@ fn cleanup_server(app: &tauri::AppHandle) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![set_orientation, get_fold])
+        .invoke_handler(tauri::generate_handler![get_fold])
         .setup(|app| {
             // macOS：附件应用，不显示 Dock 图标，也不参与 Cmd+Tab
             #[cfg(target_os = "macos")]
@@ -1076,8 +1152,25 @@ fn main() {
                 .minimizable(false)
                 .skip_taskbar(true)
                 .shadow(false);
+            // 页面加载完成后重新应用吸附边，保证 CSS 圆角方向与实际位置一致
+            builder = builder.on_page_load(|window, payload| {
+                if !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    return;
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let win = window.clone();
+                    let _ = window.run_on_main_thread(move || place_macos_saved(&win));
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let win = window.clone();
+                    let _ = window.run_on_main_thread(move || place_linux_saved(&win));
+                }
+                let _ = &window;
+            });
             // Linux：resizable(false) 会把 WM_NORMAL_HINTS 的 min/max 锁在当前尺寸，
-            // 之后横/竖切换就无法改宽高；Linux 不锁尺寸，由 place_linux_* 直接改 X11 几何。
+            // 干扰 place_linux_* 通过 X11 直接定位；Linux 不锁尺寸。
             #[cfg(not(target_os = "linux"))]
             {
                 builder = builder.resizable(false);
@@ -1122,10 +1215,10 @@ fn main() {
                 }
             }
 
-            // macOS：原生毛玻璃 + 贴主屏底部（Dock 之上）
+            // macOS：原生毛玻璃 + 贴上次记住的显示器边缘（默认主屏底部，Dock 之上）
             #[cfg(target_os = "macos")]
             {
-                place_macos(&window, false);
+                place_macos_saved(&window);
                 // HUD 材质 + Active 状态：附件应用几乎不会成为活跃窗口，
                 // 固定 Active 才能一直保持毛玻璃的鲜明效果。
                 if let Err(err) = window_vibrancy::apply_vibrancy(
@@ -1136,6 +1229,13 @@ fn main() {
                 ) {
                     eprintln!("apply_vibrancy failed: {err}");
                 }
+                // 拖动结束后吸附到窗口中心所在的显示器上/下边
+                let event_window = window.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Moved(_)) {
+                        schedule_macos_snap(event_window.clone());
+                    }
+                });
             }
 
             // Linux/X11：贴所在显示器的工作区（GNOME 顶部面板之下），并压到普通窗口之下。
@@ -1143,20 +1243,17 @@ fn main() {
             // 由前端 html.tauri-linux 用更深的暗色叠加降级，内层虚焦保持不变。
             #[cfg(target_os = "linux")]
             {
-                place_linux_saved(&window, false);
+                place_linux_saved(&window);
                 let _ = window.show();
                 // 有的 WM 在首次 map 后才应用尺寸，显示后再定位一次
-                place_linux_saved(&window, false);
+                place_linux_saved(&window);
                 lower_linux(&window);
                 // 首次 map 后 GTK/WebKit 可能又把窗口恢复成初始 1400 宽；延迟再校正一次
                 let adjust = window.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(1200));
                     let win = adjust.clone();
-                    let _ = adjust.run_on_main_thread(move || {
-                        let vertical = LINUX_VERTICAL.load(Ordering::SeqCst);
-                        place_linux_current(&win, vertical);
-                    });
+                    let _ = adjust.run_on_main_thread(move || place_linux_current(&win));
                 });
                 // 获得焦点后延迟沉回底部；拖动结束后吸附到窗口中心所在的显示器
                 let event_window = window.clone();
@@ -1170,7 +1267,6 @@ fn main() {
                         });
                     }
                     tauri::WindowEvent::Moved(_) => schedule_linux_snap(event_window.clone()),
-                    tauri::WindowEvent::Resized(_) => schedule_linux_width_save(event_window.clone()),
                     _ => {}
                 });
             }

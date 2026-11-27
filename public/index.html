@@ -36,12 +36,6 @@
               <button id="fetch" class="tool-btn" title="git fetch --all --prune">FETCH</button>
               <button id="auto" class="tool-btn" title="每 60 秒自动 fetch">AUTO</button>
             </div>
-            <button id="orient" class="tool-btn" title="切换到竖版">竖</button>
-            <div id="orient-toggle" class="mode-toggle orient-toggle" data-active="h" role="group" aria-label="方向：横 / 竖">
-              <span class="pill" aria-hidden="true"></span>
-              <button type="button" data-orient="h" class="on" aria-pressed="true">横</button>
-              <button type="button" data-orient="v" aria-pressed="false">竖</button>
-            </div>
             <div id="notice" class="notice" hidden></div>
             <div class="mode-toggle" id="mode-toggle" data-active="local" role="group" aria-label="视角：本地 / 远端">
               <span class="pill" aria-hidden="true"></span>
@@ -81,8 +75,6 @@
         </div>
       </section>
     </main>
-    <div id="resize-w" class="resize-w" title="拖动调整竖版宽度"></div>
-    <div id="resize-e" class="resize-e" title="拖动调整竖版宽度"></div>
     <div id="tip" class="tip" hidden></div>
     <div id="detail" class="detail" hidden></div>
     <script type="module" src="/app.js"></script>

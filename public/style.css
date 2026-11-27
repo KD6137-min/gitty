@@ -18,26 +18,25 @@ html.tauri .radar { background: rgba(18, 18, 16, .22); -webkit-backdrop-filter: 
 /* macOS：深色 vibrancy 下再压一层暗色，保证灰色文字清晰；圆角与 NSVisualEffectView 一致 */
 html.tauri-macos { color-scheme: dark; }
 html.tauri-macos .radar { background: rgba(18, 18, 16, .42); border-radius: 16px 16px 0 0; overflow: hidden; }
-/* Linux/X11：没有系统级背景模糊（window-vibrancy 不支持 Linux，Mutter 也不模糊窗口背后），
-   且透明窗口在软件合成下会逐渐累积变暗；改用不透明深色底，内层虚焦、玻璃带与 16px 圆角保持不变。
-   竖版贴左，圆角放在外缘。 */
-html.tauri-linux { color-scheme: dark; }
-html.tauri-linux .radar { background: #1e1e1b; border-radius: 16px 16px 0 0; overflow: hidden; }
-html.tauri-linux[data-orient="v"] .radar { border-radius: 0 16px 16px 0; }
-/* X11 没有桌面 blur，这些 backdrop-filter 只会增加重绘成本 */
-html.tauri-linux .repo-menu { -webkit-backdrop-filter: none; backdrop-filter: none; }
-/* 横版贴顶：圆角、描边和投影翻到下方 */
-html.tauri-linux[data-orient="h"][data-h-edge="top"] .radar {
+/* 贴顶：圆角、描边和投影翻到下方 */
+html.tauri-macos[data-h-edge="top"] .radar {
   border-radius: 0 0 16px 16px;
   border-top: 0;
   border-bottom: 1px solid rgba(237, 233, 222, .30);
   box-shadow: 0 18px 50px rgba(0, 0, 0, .25);
 }
-/* 竖版：投影朝向屏幕内侧；贴右时圆角翻到左侧 */
-html.tauri-linux[data-orient="v"] .radar { box-shadow: 18px 0 50px rgba(0, 0, 0, .25); }
-html.tauri-linux[data-orient="v"][data-v-edge="right"] .radar {
-  border-radius: 16px 0 0 16px;
-  box-shadow: -18px 0 50px rgba(0, 0, 0, .25);
+/* Linux/X11：没有系统级背景模糊（window-vibrancy 不支持 Linux，Mutter 也不模糊窗口背后），
+   且透明窗口在软件合成下会逐渐累积变暗；改用不透明深色底，内层虚焦、玻璃带与 16px 圆角保持不变。 */
+html.tauri-linux { color-scheme: dark; }
+html.tauri-linux .radar { background: #1e1e1b; border-radius: 16px 16px 0 0; overflow: hidden; }
+/* X11 没有桌面 blur，这些 backdrop-filter 只会增加重绘成本 */
+html.tauri-linux .repo-menu { -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* 贴顶：圆角、描边和投影翻到下方 */
+html.tauri-linux[data-h-edge="top"] .radar {
+  border-radius: 0 0 16px 16px;
+  border-top: 0;
+  border-bottom: 1px solid rgba(237, 233, 222, .30);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .25);
 }
 body {
   margin: 0; min-width: 640px; background: #C6C2B8; color: var(--ink);
@@ -62,7 +61,7 @@ header[data-tauri-drag-region] { cursor: grab; }
 header[data-tauri-drag-region]:active { cursor: grabbing; }
 .h-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .h-right { display: flex; align-items: center; gap: 14px; justify-self: end; min-width: 0; }
-/* 横版保持原来的流式布局；竖版把按钮组包成一个可均匀铺开的容器，状态点单独靠右 */
+/* 按钮组按流式布局铺开，状态点单独靠右 */
 .h-controls { display: contents; }
 .brand { display: flex; align-items: center; gap: 11px; font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; font-weight: 700; letter-spacing: .16em; font-size: 20px; color: var(--ink); }
 .brand-mark { width: 14px; height: 14px; background: var(--red); display: block; transform: rotate(45deg); }
@@ -82,13 +81,10 @@ header[data-tauri-drag-region]:active { cursor: grabbing; }
 .repo i { flex: none; margin-left: auto; font-style: normal; color: var(--muted); font-size: 12px; }
 .repo.needs-repo i { color: var(--red); }
 
-/* 仓库切换下拉：深色玻璃面板 */
-.repo-menu { position: absolute; top: calc(100% + 12px); left: 0; width: 380px; max-width: 72vw; z-index: 40; padding: 10px; background: rgba(20, 20, 18, .96); border: 1px solid var(--hair); border-radius: 10px; box-shadow: 0 18px 44px rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
-/* 横版窗口只有 315px 高，菜单必须压缩列表高度才放得下“浏览…”按钮 */
-html[data-orient="h"] .repo-menu { max-height: calc(var(--bar-h) - 66px); overflow: auto; }
-html[data-orient="h"] .repo-list { max-height: 110px; }
+/* 仓库切换下拉：深色玻璃面板；窗口只有 315px 高，菜单必须压缩列表高度才放得下“浏览…”按钮 */
+.repo-menu { position: absolute; top: calc(100% + 12px); left: 0; width: 380px; max-width: 72vw; z-index: 40; padding: 10px; background: rgba(20, 20, 18, .96); border: 1px solid var(--hair); border-radius: 10px; box-shadow: 0 18px 44px rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); max-height: calc(var(--bar-h) - 66px); overflow: auto; }
+.repo-list { max-height: 110px; overflow: auto; }
 .repo-menu-title { padding: 2px 8px 6px; font-size: 10px; letter-spacing: .1em; color: var(--muted); }
-.repo-list { max-height: 240px; overflow: auto; }
 .repo-list .repo-menu-title { padding: 8px; }
 .repo-item { display: block; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: 500 12px ui-monospace, Consolas, monospace; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .repo-item:hover { background: rgba(255, 255, 255, .08); }
@@ -105,13 +101,12 @@ html[data-orient="h"] .repo-list { max-height: 110px; }
 .tool-btn:hover { background: rgba(255, 255, 255, .12); }
 .tool-btn.on { background: var(--ink); color: #141412; }
 .tool-btn.busy { opacity: .5; pointer-events: none; }
-/* 横版：FETCH / AUTO 合成一个胶囊，中间留一条小缝；两半等宽 */
-.fetch-group { display: contents; }
-html[data-orient="h"] .fetch-group { display: inline-flex; align-items: stretch; height: 34px; gap: 2px; }
-html[data-orient="h"] .fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
-html[data-orient="h"] .fetch-group #auto { border-radius: 3px 999px 999px 3px; }
-html[data-orient="h"] .fetch-group #fetch,
-html[data-orient="h"] .fetch-group #auto { width: 60px; height: 100%; padding: 0; display: flex; align-items: center; justify-content: center; text-align: center; white-space: nowrap; }
+/* FETCH / AUTO 合成一个胶囊，中间留一条小缝；两半等宽 */
+.fetch-group { display: inline-flex; align-items: stretch; height: 34px; gap: 2px; }
+.fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
+.fetch-group #auto { border-radius: 3px 999px 999px 3px; }
+.fetch-group #fetch,
+.fetch-group #auto { width: 60px; height: 100%; padding: 0; display: flex; align-items: center; justify-content: center; text-align: center; white-space: nowrap; }
 /* 工作区状态：已暂存 / 未暂存 / 未跟踪 */
 .wt { flex: none; display: flex; align-items: center; gap: 7px; padding: 3px 9px; border: 1px solid var(--hair); border-radius: 999px; background: rgba(255, 255, 255, .06); font: 600 11px ui-monospace, Consolas, monospace; color: var(--ink); white-space: nowrap; }
 .wt .s { color: #6D9BFF; }
@@ -131,37 +126,6 @@ html[data-orient="h"] .fetch-group #auto { width: 60px; height: 100%; padding: 0
   box-shadow: 0 0 0 2px rgba(20, 20, 18, .22);
 }
 
-/* —— 竖版：左侧竖条，时间轴竖直（最新在上），车道为列 —— */
-html[data-orient="v"] body { min-width: 0; align-items: flex-start; overflow-x: hidden; }
-html[data-orient="v"] .radar { width: 315px; height: 100vh; overflow: hidden; }
-/* 桌面端竖版宽度由窗口决定（默认半屏，可拖右缘调整） */
-html.tauri[data-orient="v"] .radar { width: 100%; }
-html[data-orient="v"] header { display: flex; flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
-html[data-orient="v"] .h-left { flex: 1 1 100%; gap: 10px; }
-html[data-orient="v"] .repo-wrap { flex: 1 1 auto; max-width: none; }
-html[data-orient="v"] .h-right { flex: 1 1 100%; justify-content: space-between; flex-wrap: nowrap; gap: 6px; }
-html[data-orient="v"] .h-controls { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; justify-content: space-evenly; flex-wrap: wrap; gap: 6px; }
-html[data-orient="v"] .shortcuts { display: none; }
-html[data-orient="v"] .mode-toggle { width: 122px; height: 30px; }
-html[data-orient="v"] #orient { width: 122px; }
-html[data-orient="v"] .mode-toggle button { font-size: 13px; letter-spacing: .04em; }
-/* 竖版：按钮行居中并适当放大，状态点跟着一起居中 */
-html[data-orient="v"] .tool-btn { font-size: 13px; height: 30px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; }
-/* 竖版：FETCH/AUTO 保持一个胶囊（一项），高度与本地/远端一致 */
-html[data-orient="v"] .fetch-group { display: inline-flex; align-items: stretch; height: 30px; gap: 2px; }
-html[data-orient="v"] .fetch-group #fetch { border-radius: 999px 3px 3px 999px; }
-html[data-orient="v"] .fetch-group #auto { border-radius: 3px 999px 999px 3px; }
-html[data-orient="v"] .fetch-group #fetch,
-html[data-orient="v"] .fetch-group #auto { width: 60px; height: 100%; padding: 0; display: flex; align-items: center; justify-content: center; white-space: nowrap; }
-html[data-orient="v"] .graph { min-height: 0; }
-html[data-orient="v"] .scroll { right: 26px; }
-html[data-orient="v"] .timeline {
-  position: absolute; right: 8px; top: 8px; bottom: 8px; left: auto;
-  width: 18px; height: auto; max-width: none; transform: none; justify-self: auto;
-}
-html[data-orient="v"] .tl-mark { left: 50%; top: auto; }
-/* 竖版：菜单右对齐并限制在竖条内，避免撑出横向滚动条 */
-html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(100vw - 20px)); max-width: none; }
 /* 连接状态点：正常时隐藏，服务断开才显示红点 */
 /* 连接状态：常亮小点，正常暗白、断线变红 */
 .status { flex: none; width: 8px; height: 8px; border-radius: 50%; background: rgba(237, 233, 222, .28); transition: background .3s ease, box-shadow .3s ease; }
@@ -174,8 +138,8 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 
 /* 新提交提示：与整体一致的玻璃胶囊，占位于右侧控件之间，不会盖住按钮 */
 #notice { flex: none; max-width: 380px; overflow: hidden; text-overflow: ellipsis; padding: 5px 11px; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid var(--hair); color: var(--ink); font-size: 11px; letter-spacing: .03em; white-space: nowrap; }
-@media (max-width: 1150px) { html[data-orient="h"] .shortcuts { display: none; } }
-@media (max-width: 900px) { html[data-orient="h"] .timeline { display: none; } }
+@media (max-width: 1150px) { .shortcuts { display: none; } }
+@media (max-width: 900px) { .timeline { display: none; } }
 
 /* 视角切换：玻璃胶囊 + 滑动亮色药丸（放在顶栏最右） */
 .mode-toggle {
@@ -200,7 +164,7 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 .mode-toggle[data-active="local"] button[data-mode="local"],
 .mode-toggle[data-active="remote"] button[data-mode="remote"] { color: #141412; }
 .mode-toggle button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 999px; }
-/* 本地/远端、横/竖分段统一成 FETCH/AUTO 同款双半胶囊 */
+/* 本地/远端分段统一成 FETCH/AUTO 同款双半胶囊 */
 .mode-toggle { padding: 0; gap: 2px; border: 0; border-radius: 0; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .mode-toggle .pill { display: none; }
 .mode-toggle button {
@@ -212,17 +176,8 @@ html[data-orient="v"] .repo-menu { left: auto; right: 0; width: min(280px, calc(
 .mode-toggle button:last-of-type { border-radius: 3px 999px 999px 3px; }
 .mode-toggle button.on { background: var(--ink); color: #141412; }
 .mode-toggle button:not(.on):hover { background: rgba(255, 255, 255, .13); }
-/* 横版：细调一点视觉重心，并把「横 / 竖」做成同款分段开关 */
-html[data-orient="h"] .mode-toggle { top: 1px; }
-.orient-toggle { display: none; width: 122px; }
-html[data-orient="h"] .orient-toggle { display: flex; }
-html[data-orient="h"] #orient { display: none; }
-.orient-toggle[data-active="v"] .pill { transform: translateX(100%); }
-.orient-toggle[data-active="h"] button[data-orient="h"],
-.orient-toggle[data-active="v"] button[data-orient="v"] { color: #141412; }
-/* Linux 的横/竖切换在系统托盘菜单里，窗口内不再显示按钮 */
-html.tauri-linux .orient-toggle,
-html.tauri-linux #orient { display: none !important; }
+/* 细调一点视觉重心 */
+.mode-toggle { top: 1px; }
 
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; font-size: 15px; color: #CFCBC0; letter-spacing: .02em; }
 .empty-title { font-size: 16px; font-weight: 600; color: var(--ink); }
@@ -233,14 +188,6 @@ html.tauri-linux #orient { display: none !important; }
 .scroll { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; -ms-overflow-style: none; }
 .scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 #canvas { display: block; transform: translateZ(0); }
-/* Linux 竖版：左右两条 5px 热区，贴左拖右缘、贴右拖左缘 */
-.resize-e, .resize-w { display: none; position: fixed; top: 0; width: 5px; height: 100%; z-index: 30; cursor: ew-resize; }
-.resize-e { right: 0; }
-.resize-w { left: 0; }
-html.tauri-linux[data-orient="v"] .resize-e,
-html.tauri-linux[data-orient="v"] .resize-w { display: block; }
-html.tauri-linux[data-orient="v"] .resize-e:hover,
-html.tauri-linux[data-orient="v"] .resize-w:hover { background: rgba(237, 233, 222, .12); }
 .hits { position: absolute; left: 0; top: 0; pointer-events: none; }
 .hit { position: absolute; width: 26px; height: 26px; transform: translate(-50%, -50%); pointer-events: auto; cursor: default; }
 
@@ -320,11 +267,8 @@ html[data-mode="remote"] .rebase-links { opacity: .35; filter: url(#gitty-blur-s
 .chips { pointer-events: none; }
 .chip { pointer-events: auto; cursor: pointer; font: 600 19px 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; fill: var(--ink); paint-order: stroke; stroke: rgba(20, 20, 18, .92); stroke-width: 4px; stroke-linejoin: round; }
 .chip.current { font-weight: 700; }
-/* 当前分支锥形标记：竖版上半部保持菱形、下半部拉长；横版旋转后右侧不变、左侧拉长 */
+/* 当前分支锥形标记：右半边保持菱形、左半边拉长 */
 .chip-cone { pointer-events: auto; cursor: pointer; }
-/* 竖版：水平两行的分支名 */
-.chip-v { font-size: 19px; stroke-width: 4px; }
-.chip-v .chip-count { font-size: 14px; }
 .chip-count { font: 500 14px ui-monospace, Consolas, monospace; fill: var(--muted); }
 .chip-remote { display: none; }
 .chip-remote.muted { opacity: .45; }
@@ -358,4 +302,4 @@ html[data-mode="remote"] .chip-ghost { display: inline; opacity: 1; }
 #tip span { display: block; color: #4A473F; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tip em { display: block; color: #7A766C; font-style: normal; margin-top: 3px; }
 
-@media (max-width: 720px) { body { min-width: 0; } html[data-orient="h"] .repo { display: none; } }
+@media (max-width: 720px) { body { min-width: 0; } .repo { display: none; } }
